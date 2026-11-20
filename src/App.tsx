@@ -119,6 +119,7 @@ export default function KonIsland() {
   const [calStatus, setCalStatus] = useState("");
   const [clips, setClips] = useState([]);
   const [update, setUpdate] = useState(null);
+  const [updStatus, setUpdStatus] = useState({ state: "idle" });
   const [appVersion, setAppVersion] = useState("");
   const [dismissed, setDismissed] = useState({});  // cards de ação dispensados
   const [askFile, setAskFile] = useState(null);    // arquivo anexado de propósito (zona "Perguntar à IA")
@@ -452,8 +453,10 @@ export default function KonIsland() {
   useEffect(() => { bridge.fgState().then(setFg); return bridge.on("fg:state", setFg); }, []);
   useEffect(() => bridge.on("privacy:state", (p) => setPriv({ mic: p.mic || [], cam: p.cam || [] })), []);
   useEffect(() => {
-    bridge.updateInfo().then((u) => { setAppVersion(u?.version || ""); if (u?.ready) setUpdate(u.ready); });
-    return bridge.on("update:ready", setUpdate);
+    bridge.updateInfo().then((u) => { setAppVersion(u?.version || ""); if (u?.ready) setUpdate(u.ready); if (u?.status) setUpdStatus(u.status); });
+    const off = bridge.on("update:status", setUpdStatus);
+    const off2 = bridge.on("update:ready", setUpdate);
+    return () => { off(); off2(); };
   }, []);
   const toggleHooks = async () => {
     setHooksMsg("");
@@ -2164,8 +2167,22 @@ export default function KonIsland() {
       {REAL && (
         <div className="flex items-center gap-2 h-9 px-2.5 rounded-xl bg-white/[0.04]">
           <RefreshCw size={13} className="text-white/50" />
-          <span className="flex-1 text-[11.5px] font-medium">Kon {appVersion} · atualizar sozinho</span>
-          <PillBtn onClick={async () => { const r = await bridge.updateCheck(); toast(r.ok ? (r.newer ? `Baixando o Kon ${r.latest}…` : "Você já tem a versão mais nova") : r.error, r.ok ? "success" : "error"); }}>Procurar</PillBtn>
+          <div className="flex-1 min-w-0">
+            <div className="text-[11.5px] font-medium">Kon {appVersion} · atualizar sozinho</div>
+            <div className={`text-[10px] leading-tight truncate ${updStatus.state === "error" ? "text-amber-300/80" : updStatus.state === "ready" ? "text-emerald-300" : "text-white/40"}`}>
+              {{ checking: "Procurando…", downloading: `Baixando o Kon ${updStatus.version || ""} · ${updStatus.percent || 0}%`, ready: `Kon ${updStatus.version} pronto para instalar`, latest: "Você tem a versão mais nova", error: `Erro: ${updStatus.message || ""}` }[updStatus.state] || "Procura sozinho ao abrir e a cada 4 h"}
+            </div>
+          </div>
+          {update ? (
+            <PillBtn primary onClick={() => bridge.updateInstall()}><RefreshCw size={11} /> Reiniciar</PillBtn>
+          ) : (
+            <PillBtn onClick={async () => {
+              setUpdStatus({ state: "checking" });
+              const r = await bridge.updateCheck();
+              if (!r.ok) { setUpdStatus({ state: "error", message: r.error }); return; }
+              if (!r.newer) setUpdStatus({ state: "latest" });
+            }}>Procurar</PillBtn>
+          )}
           <Switch on={settings.autoUpdate !== false} onChange={(v) => saveSettings({ autoUpdate: v })} color="#10b981" />
         </div>
       )}

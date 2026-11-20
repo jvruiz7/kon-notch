@@ -62,15 +62,20 @@ Function .onInstSuccess
   ${EndIf}
 FunctionEnd
 
+; Fecha o Kon SEM "/T": numa atualização automática o instalador é filho do Kon, e "/T" (árvore de
+; processos) derrubava o próprio instalador antes de instalar.
 Function CloseKon
-  nsExec::Exec 'taskkill /F /IM "${EXE}" /T'
+  ${If} $Updating == "1"
+    Sleep 2000 ; o Kon fecha sozinho depois de abrir o instalador
+  ${EndIf}
+  nsExec::Exec 'taskkill /F /IM "${EXE}"'
   Pop $0
-  Sleep 600
+  Sleep 800
 FunctionEnd
 Function un.CloseKon
-  nsExec::Exec 'taskkill /F /IM "${EXE}" /T'
+  nsExec::Exec 'taskkill /F /IM "${EXE}"'
   Pop $0
-  Sleep 600
+  Sleep 800
 FunctionEnd
 
 Section "Kon (obrigatório)" SecMain

@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 const CHANNELS = [
   "shortcut", "win:blurred", "media:state", "volume:state", "claude:event", "helper:ready",
   "ocr:started", "ocr:result", "ai:event", "toast", "fg:state", "privacy:state", "claude:perm-closed",
-  "clip:changed", "update:ready",
+  "clip:changed", "update:ready", "update:status",
 ];
 
 contextBridge.exposeInMainWorld("kon", {

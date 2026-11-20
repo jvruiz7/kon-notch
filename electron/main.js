@@ -705,23 +705,55 @@ ipcMain.handle("zip:make", (_e, paths = []) => new Promise((resolve) => {
 
 /* ═════════ Atualização automática (GitHub Releases) ═════════ */
 let updateInfo = null;
+let updateStatus = { state: "idle" };
+let updaterReady = false;
+function updLog(level, msg) {
+  try { fs.appendFileSync(userFile("kon-update.log"), `${new Date().toISOString()} ${level} ${typeof msg === "string" ? msg : JSON.stringify(msg)}\n`); } catch {}
+}
+function setUpdStatus(st) { updateStatus = { ...st, at: Date.now() }; send("update:status", updateStatus); }
 function startUpdater() {
   if (!autoUpdater || !app.isPackaged || process.platform !== "win32" || process.env.PORTABLE_EXECUTABLE_FILE) return;
-  autoUpdater.setFeedURL({ provider: "github", owner: UPDATE_REPO.owner, repo: UPDATE_REPO.repo });
+  updaterReady = true;
+  autoUpdater.logger = { info: (m) => updLog("info", m), warn: (m) => updLog("warn", m), error: (m) => updLog("error", m), debug: () => {} };
+  // Lê direto o latest.yml da Release mais recente (o feed .atom do GitHub às vezes é bloqueado por proxy/firewall).
+  // O electron-updater também exige um app-update.yml para baixar; o Kon cria o próprio em userData.
+  const feedUrl = `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest/download`;
+  const cfgPath = userFile("app-update.yml");
+  try { fs.writeFileSync(cfgPath, `provider: generic\nurl: ${feedUrl}\nupdaterCacheDirName: kon-updater\n`); autoUpdater.updateConfigPath = cfgPath; } catch (e) { updLog("error", "app-update.yml: " + e.message); }
+  autoUpdater.setFeedURL({ provider: "generic", url: feedUrl });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  autoUpdater.on("update-downloaded", (info) => { updateInfo = { version: info.version }; send("update:ready", updateInfo); });
-  autoUpdater.on("error", (e) => console.warn("updater", e?.message || e));
+  let lastPct = -1;
+  autoUpdater.on("checking-for-update", () => setUpdStatus({ state: "checking" }));
+  autoUpdater.on("update-available", (info) => setUpdStatus({ state: "downloading", version: info.version, percent: 0 }));
+  autoUpdater.on("update-not-available", () => setUpdStatus({ state: "latest" }));
+  autoUpdater.on("download-progress", (p) => {
+    const pct = Math.floor(p.percent || 0);
+    if (pct === lastPct) return;
+    lastPct = pct;
+    setUpdStatus({ state: "downloading", version: updateStatus.version, percent: pct });
+  });
+  autoUpdater.on("update-downloaded", (info) => { updateInfo = { version: info.version }; setUpdStatus({ state: "ready", version: info.version }); send("update:ready", updateInfo); });
+  autoUpdater.on("error", (e) => { const message = String(e?.message || e).split("\n")[0]; updLog("error", message); setUpdStatus({ state: "error", message }); });
   const check = () => { if (readSettings().autoUpdate !== false) autoUpdater.checkForUpdates().catch(() => {}); };
   setTimeout(check, 20e3);
   setInterval(check, 4 * 3600e3);
 }
-ipcMain.handle("update:get", () => ({ version: app.getVersion(), ready: updateInfo, portable: !!process.env.PORTABLE_EXECUTABLE_FILE }));
-ipcMain.on("update:install", () => { if (updateInfo && autoUpdater) { app.isQuitting = true; autoUpdater.quitAndInstall(true, true); } });
+ipcMain.handle("update:get", () => ({ version: app.getVersion(), ready: updateInfo, status: updateStatus, portable: !!process.env.PORTABLE_EXECUTABLE_FILE }));
+ipcMain.on("update:install", () => {
+  if (!updateInfo || !autoUpdater) return;
+  updLog("info", `instalando ${updateInfo.version}`);
+  app.isQuitting = true;
+  try { helper?.stdin.end(); helper?.kill(); } catch {}
+  setImmediate(() => autoUpdater.quitAndInstall(true, true));
+});
 ipcMain.handle("update:check", async () => {
   if (!autoUpdater || !app.isPackaged) return { ok: false, error: "Só no app instalado" };
   if (process.env.PORTABLE_EXECUTABLE_FILE) return { ok: false, error: "A versão portátil não se atualiza sozinha — use o instalador" };
-  try { const r = await autoUpdater.checkForUpdates(); const v = r?.updateInfo?.version; return { ok: true, latest: v, newer: v && v !== app.getVersion() }; }
+  if (!updaterReady) return { ok: false, error: "Atualizador indisponível" };
+  if (updateInfo) return { ok: true, latest: updateInfo.version, newer: true, ready: true };
+  if (updateStatus.state === "downloading") return { ok: true, latest: updateStatus.version, newer: true, downloading: true };
+  try { const r = await autoUpdater.checkForUpdates(); const v = r?.updateInfo?.version; return { ok: true, latest: v, newer: !!v && v !== app.getVersion() }; }
   catch (e) { return { ok: false, error: String(e?.message || e).split("\n")[0] }; }
 });
 
