@@ -338,9 +338,19 @@ export default function KonIsland() {
   }, [mode]);
 
   /* ─── Mídia do Windows (GSMTC) ─── */
+  /* Capa: a do Windows (exata) vence; enquanto ela não chega, a do catálogo entra em ~0,3 s.
+     Capas já vistas ficam em memória, então voltar a uma música mostra a capa na hora. */
+  const thumbCache = useRef(new Map());
+  const nativeArt = useRef(new Set());
   useEffect(() => bridge.on("media:state", (m) => {
-    if (m.thumb?.data) setArt(`data:${m.thumb.mime || "image/png"};base64,${m.thumb.data}`);
-    else if (m.trackChanged || !m.active) setArt(null);
+    const key = `${m.title}|${m.artist}`;
+    if (m.thumb?.data) {
+      const url = `data:${m.thumb.mime || "image/png"};base64,${m.thumb.data}`;
+      thumbCache.current.set(key, url);
+      if (thumbCache.current.size > 40) thumbCache.current.delete(thumbCache.current.keys().next().value);
+      nativeArt.current.add(key);
+      setArt(url);
+    } else if (m.trackChanged || !m.active) setArt(m.active ? thumbCache.current.get(key) || null : null);
     setMedia(m);
   }), []);
   useEffect(() => {
@@ -496,16 +506,21 @@ export default function KonIsland() {
     }
   }, []); // eslint-disable-line
 
-  /* Capa do álbum: se o Windows não entregar a imagem em ~2,5 s, busca no catálogo do iTunes */
+  /* Catálogo do iTunes em paralelo, já na troca de faixa (fica em cache por 30 dias) */
   useEffect(() => {
-    if (!REAL || !media.active || art || !media.title) return;
+    if (!REAL || !media.active || !media.title) return;
+    const key = `${media.title}|${media.artist}`;
     let alive = true;
-    const t = setTimeout(async () => {
-      const url = await getCoverArt(media.title, media.artist, media.album).catch(() => null);
-      if (alive && url) setArt(url);
-    }, 2500);
-    return () => { alive = false; clearTimeout(t); };
-  }, [REAL, media.active, media.title, media.artist, art]); // eslint-disable-line
+    const t0 = Date.now();
+    getCoverArt(media.title, media.artist, media.album).then((url) => {
+      if (!alive || !url) return;
+      // dá 300 ms de vantagem para a capa do Windows, que é a exata
+      const img = new Image(); // pré-carrega para não piscar um quadro vazio
+      img.onload = img.onerror = () => setTimeout(() => { if (alive && !nativeArt.current.has(key)) setArt((cur) => cur || url); }, Math.max(0, 300 - (Date.now() - t0)));
+      img.src = url;
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [REAL, media.active, media.title, media.artist]); // eslint-disable-line
 
   /* ─── Arquivos (File Stash — sem IA) ─── */
   const refreshStash = async () => setStash(await bridge.stashList());

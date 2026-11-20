@@ -17,44 +17,22 @@ TypeScript, Tailwind e Framer Motion (mola `stiffness 380 / damping 30`).
 | **Music** | Player ativo do Windows (GSMTC): título, artista, capa, play/pause, próxima, anterior, seek + letra sincronizada. A capa é relida por ~12 s após a troca de faixa; se o app não entregar, vem do catálogo do iTunes | LRCLIB, iTunes |
 | **Clima** | Página própria: temperatura, sensação, umidade, vento, chance de chuva, próximas 6 horas e arco do sol (nascer → pôr). Avisa no notch quando há chuva provável nas próximas horas. Localização atual (IP) ou capitais: Porto Velho, São Paulo, Brasília, Rio, Manaus, Curitiba | Open-Meteo |
 | **Volume** | Aviso de volume ao mudar o volume do Windows | — |
-| **Claude Code: ao vivo** | Tarefa, arquivo, diff, etapas e sessões abertas via hooks HTTP | local |
-| **Claude Code: aprovar pelo notch** | Quando o Claude pede permissão, o notch mostra um card com **Negar / Permitir** (+ "Sempre permitir" e "No terminal"). Sem resposta em ~100 s, a pergunta volta para o terminal | local |
-| **Claude Code: uso** | Página **Uso**: janela de 5 h (estimativa), tokens e custo aproximado de hoje e da semana, gráfico de 7 dias, divisão por modelo, sessões e tokens do chat do Kon. Lido dos transcripts em `~/.claude/projects`; nada sai do PC. Acima de 80% aparece uma barra no notch fechado | — |
-| **Área de transferência** (`Ctrl+Alt+V`) | Histórico de textos copiados (40 itens, fixar, apagar, pausar). Ignora o que parece senha, chave de API ou cartão | — |
-| **Zonas de soltar** | Ao arrastar um arquivo: **Guardar** (só referência), **Perguntar à IA** (envia o arquivo, só quando você solta ali) ou **Compactar** (.zip ao lado) | opcional |
-| **Agenda** | Cole o link .ics (Google, Outlook, iCloud). Eventos de hoje no To-do, aviso 2 min antes e botão **Entrar** com o link do Meet/Zoom/Teams | sua agenda |
-| **Privacidade** | Pontinho laranja (microfone) e verde (câmera) no notch, com o nome do app no painel | — |
-| **Discreto** | Some em jogos, vídeos e slides em tela cheia; vira uma linha fina sobre janelas maximizadas; fica fora de prints e de compartilhamento de tela | — |
+| **Claude Code** | Tarefa, arquivo, diff e etapas ao vivo via hooks HTTP | local |
 | **To-do + calendário, Focus, Water** | Salvos no computador | — |
 | **Notificações** | O próprio notch mostra avisos com o mascote: arquivo guardado, OCR copiado, chuva chegando, fim do foco, Claude terminou | — |
 | **Mascote tofu** | Vive dentro da ilha. Estados: repouso, trabalhando (selo azul), precisa de você (selo laranja + brilho âmbar), concluído (^ ^, selo verde + brilho verde), erro (olhos tontos + brilho roxo), música, foco, dormindo, ouvindo e "engolindo arquivo" ao arrastar | — |
 
-## Instalar
+## Rodar
 
-Baixe o **Kon-Setup-x.y.z.exe** em [Releases](https://github.com/jvruiz7/kon-notch/releases/latest) e abra.
-A instalação é só para o seu usuário (não pede administrador) e cria atalho no Menu Iniciar.
-
-> O instalador ainda não tem assinatura digital, então o Windows SmartScreen pode avisar
-> "O Windows protegeu o computador". Clique em **Mais informações → Executar assim mesmo**.
-
-**Atualização automática:** o Kon procura versões novas aqui no GitHub ao abrir e a cada 4 horas,
-baixa em segundo plano e mostra um card **Reiniciar** no notch. Dá para desligar em Ajustes.
-
-## Desenvolver
-
-Requisitos: Node.js 20 ou superior.
+Requisitos: Windows 10/11 e Node.js 20 ou superior.
 
 ```bash
 npm install
-npm run dev        # desenvolvimento (Vite + Electron)
-npm run installer  # release/Kon-Setup-<versão>.exe + latest.yml (Linux ou WSL, sem Wine)
+npm run dev      # desenvolvimento (Vite + Electron)
+npm run dist     # instalador + portátil: release/Kon Setup 1.1.0.exe e release/Kon 1.1.0.exe
 ```
 
-**Publicar uma versão:** aumente `version` no `package.json` e envie para o `main`. O GitHub Actions
-compila o instalador e cria a Release `v<versão>` com `Kon-Setup-<versão>.exe` e `latest.yml`;
-os apps instalados se atualizam sozinhos.
-
-Primeira vez: o Kon abre as **boas-vindas em 3 passos** (IA, Claude Code e o que mostrar). Depois, tudo fica em **engrenagem** → **Ajustes** → cole `GEMINI_API_KEY`
+Primeira vez: passe o mouse na ilha → **engrenagem** → **Ajustes** → cole `GEMINI_API_KEY`
 (https://aistudio.google.com/apikey) e/ou `ANTHROPIC_API_KEY` (https://console.anthropic.com/settings/keys).
 As chaves são criptografadas com `safeStorage` (DPAPI do Windows) e nunca voltam para a interface.
 

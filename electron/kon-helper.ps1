@@ -87,8 +87,10 @@ public class KonFg {
     bool shell = c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" || c == "Shell_SecondaryTrayWnd";
     bool covers = r.L <= mi.rcMonitor.L && r.T <= mi.rcMonitor.T && r.R >= mi.rcMonitor.R && r.B >= mi.rcMonitor.B;
     int q = 0; try { SHQueryUserNotificationState(out q); } catch { }
-    bool full = !shell && (covers || q == 3 || q == 4);
-    bool max = !shell && !full && IsZoomed(h);
+    // janela maximizada passa ~8 px da borda do monitor: não é tela cheia
+    bool zoomed = IsZoomed(h);
+    bool full = !shell && ((covers && !zoomed) || q == 3 || q == 4);
+    bool max = !shell && !full && zoomed;
     int cx = (mi.rcMonitor.L + mi.rcMonitor.R) / 2, cy = (mi.rcMonitor.T + mi.rcMonitor.B) / 2;
     return (full ? "1" : "0") + "|" + (max ? "1" : "0") + "|" + cx + "|" + cy + "|" + pid;
   }
@@ -123,9 +125,9 @@ $script:lastPriv = ''
 # ───────── Mídia (Global System Media Transport Controls) ─────────
 $mediaOk = $false
 $mgr = $null
-function Await($op, [Type]$type) {
+function Await($op, [Type]$type, [int]$ms = 8000) {
   $task = $script:asTaskGeneric.MakeGenericMethod($type).Invoke($null, @($op))
-  if ($task.Wait(8000)) { return $task.Result }
+  if ($task.Wait($ms)) { return $task.Result }
   return $null
 }
 try {
@@ -145,7 +147,7 @@ try {
 function Get-Thumb($ref) {
   if ($null -eq $ref) { return $null }
   try {
-    $stream = Await ($ref.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+    $stream = Await ($ref.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType]) 1500
     if ($null -eq $stream) { return $null }
     $mime = $stream.ContentType
     # Converte o stream WinRT em stream .NET (bem mais confiável que DataReader no PowerShell)
@@ -158,14 +160,19 @@ function Get-Thumb($ref) {
     if (-not $mime -or $mime -notlike 'image/*') {
       if ($bytes[0] -eq 0xFF -and $bytes[1] -eq 0xD8) { $mime = 'image/jpeg' } else { $mime = 'image/png' }
     }
-    return @{ mime = $mime; data = [Convert]::ToBase64String($bytes) }
+    $hash = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash($bytes))
+    return @{ mime = $mime; data = [Convert]::ToBase64String($bytes); hash = $hash }
   } catch { return $null }
 }
 
 $script:lastKey = ''
 $script:thumbTries = 0
 $script:thumbDone = $false
-function Emit-Media {
+$script:prevThumbHash = ''
+$script:curThumbHash = ''
+$script:lastSig = ''
+$script:lastEmitAt = [DateTime]::MinValue
+function Emit-Media([bool]$force = $false) {
   if (-not $mediaOk) { return }
   try {
     $s = $mgr.GetCurrentSession()
@@ -173,26 +180,42 @@ function Emit-Media {
       if ($script:lastKey -ne 'none') { $script:lastKey = 'none'; Emit @{ type = 'media'; active = $false } }
       return
     }
-    $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+    $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]) 2000
     if ($null -eq $p) { return }
     $info = $s.GetPlaybackInfo()
-    $tl = $s.GetTimelineProperties()
     $key = "$($s.SourceAppUserModelId)|$($p.Title)|$($p.Artist)"
-    $thumb = $null
     $changed = $false
-    if ($key -ne $script:lastKey) { $script:lastKey = $key; $changed = $true; $script:thumbTries = 0; $script:thumbDone = $false }
-    # Spotify/navegadores costumam publicar a capa alguns segundos depois da troca de faixa: tenta por ~12 s
-    if (-not $script:thumbDone -and $script:thumbTries -lt 12) {
-      $script:thumbTries++
-      $thumb = Get-Thumb $p.Thumbnail
-      if ($thumb) { $script:thumbDone = $true }
+    if ($key -ne $script:lastKey) {
+      $script:lastKey = $key; $changed = $true; $script:thumbTries = 0; $script:thumbDone = $false
+      $script:prevThumbHash = $script:curThumbHash; $script:curThumbHash = ''
     }
+    # A capa costuma chegar alguns instantes depois da troca de faixa: tenta a cada 250 ms nos
+    # primeiros 4 s, depois a cada 1 s até 15 s. Ignora a capa da faixa anterior (Spotify às vezes repete).
+    $thumb = $null
+    if (-not $script:thumbDone -and $script:thumbTries -lt 27) {
+      $fast = $script:thumbTries -lt 16
+      if ($fast -or $script:tick % 4 -eq 0) {
+        $script:thumbTries++
+        $t = Get-Thumb $p.Thumbnail
+        if ($t -and ($t.hash -ne $script:prevThumbHash -or $script:thumbTries -ge 6)) {
+          $thumb = $t; $script:thumbDone = $true; $script:curThumbHash = $t.hash
+        }
+      }
+    }
+    $status = [int]$info.PlaybackStatus
     $repeat = 0; if ($null -ne $info.AutoRepeatMode) { $repeat = [int]$info.AutoRepeatMode }
     $shuffle = $false; if ($null -ne $info.IsShuffleActive) { $shuffle = [bool]$info.IsShuffleActive }
+    $sig = "$key|$status|$repeat|$shuffle"
+    $now = [DateTime]::UtcNow
+    # só manda quando algo mudou, quando achou a capa, ou 1x por segundo (posição)
+    if (-not $force -and -not $changed -and -not $thumb -and $sig -eq $script:lastSig -and ($now - $script:lastEmitAt).TotalMilliseconds -lt 950) { return }
+    $script:lastSig = $sig; $script:lastEmitAt = $now
+    $tl = $s.GetTimelineProperties()
+    if ($thumb) { $thumb.Remove('hash') }
     Emit @{
       type = 'media'; active = $true; app = $s.SourceAppUserModelId
       title = $p.Title; artist = $p.Artist; album = $p.AlbumTitle
-      status = [int]$info.PlaybackStatus
+      status = $status
       position = $tl.Position.TotalSeconds; duration = ($tl.EndTime - $tl.StartTime).TotalSeconds
       updated = $tl.LastUpdatedTime.ToUnixTimeMilliseconds()
       shuffle = $shuffle; repeat = $repeat
@@ -252,8 +275,8 @@ function Invoke-Cmd($c) {
     'shuffle' { $null = Await ($s.TryChangeShuffleActiveAsync([bool]$c.value)) ([bool]) }
     'repeat'  { $null = Await ($s.TryChangeAutoRepeatModeAsync([Windows.Media.MediaPlaybackAutoRepeatMode][int]$c.value)) ([bool]) }
   }
-  Start-Sleep -Milliseconds 150
-  Emit-Media
+  Start-Sleep -Milliseconds 120
+  Emit-Media $true
 }
 
 Emit @{ type = 'ready'; volume = $volOk; media = $mediaOk }
@@ -262,7 +285,7 @@ Emit @{ type = 'ready'; volume = $volOk; media = $mediaOk }
 $stdin = New-Object System.IO.StreamReader([Console]::OpenStandardInput())
 $pending = $stdin.ReadLineAsync()
 $lastVol = ''
-$tick = 0
+$script:tick = 0
 while ($true) {
   if ($pending.IsCompleted) {
     $line = $null
@@ -281,8 +304,8 @@ while ($true) {
       if ($k -ne $lastVol) { $lastVol = $k; Emit @{ type = 'volume'; level = $v; muted = $m } }
     } catch { [KonAudio]::Reset() }
   }
-  if ($tick % 4 -eq 0) { Emit-Media }
-  if ($fgOk -and $tick % 2 -eq 0) {
+  Emit-Media
+  if ($fgOk -and $script:tick % 2 -eq 0) {
     try {
       $st = [KonFg]::State()
       if ($st -ne $script:lastFg) {
@@ -292,13 +315,13 @@ while ($true) {
       }
     } catch {}
   }
-  if ($tick % 8 -eq 2) {
+  if ($script:tick % 8 -eq 2) {
     try {
       $mic = Get-InUse 'microphone'; $cam = Get-InUse 'webcam'
       $k = ($mic -join ',') + '|' + ($cam -join ',')
       if ($k -ne $script:lastPriv) { $script:lastPriv = $k; Emit @{ type = 'privacy'; mic = @($mic); cam = @($cam) } }
     } catch {}
   }
-  $tick++
+  $script:tick++
   Start-Sleep -Milliseconds 250
 }

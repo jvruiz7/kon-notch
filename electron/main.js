@@ -522,9 +522,9 @@ ipcMain.handle("ai:transcribe", async (_e, { base64, mime }) => {
 
 /* ═════════ Claude Code: servidor local para hooks HTTP ═════════ */
 // PermissionRequest fica "segurado" até você responder no notch (Negar / Permitir / Sempre).
-// Se você não responder em ~100 s, ou escolher "No terminal", o Kon devolve {} e o Claude Code
+// Se você não responder em ~45 s, ou escolher "No terminal", o Kon devolve {} e o Claude Code
 // mostra a pergunta normal no terminal. Os outros eventos respondem na hora.
-const PERM_HOLD_MS = 100e3;
+const PERM_HOLD_MS = 45e3; // depois disso a pergunta volta para o terminal
 function permOutput(decision, ev) {
   if (decision === "allow") return { hookSpecificOutput: { hookEventName: "PermissionRequest", decision: { behavior: "allow" } } };
   if (decision === "always") {

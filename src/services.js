@@ -115,7 +115,7 @@ export async function getCoverArt(title, artist, album) {
   const { t, a } = cleanTrack(title, artist);
   const rec = await swr(`cover.${a}|${t}`.toLowerCase(), 30 * 864e5, async () => {
     const term = [a, t].filter(Boolean).join(" ");
-    const r = await fetch(`https://itunes.apple.com/search?${new URLSearchParams({ term, entity: "song", limit: "5", country: "BR" })}`);
+    const r = await fetch(`https://itunes.apple.com/search?${new URLSearchParams({ term, entity: "song", limit: "5", country: "BR" })}`, { signal: AbortSignal.timeout(5000) });
     const d = r.ok ? await r.json() : { results: [] };
     const norm = (x) => String(x || "").toLowerCase();
     const hit = (d.results || []).find((x) => norm(x.trackName).includes(norm(t).slice(0, 12)) || norm(x.artistName).includes(norm(a).slice(0, 8))) || d.results?.[0];

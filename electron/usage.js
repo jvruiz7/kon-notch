@@ -37,14 +37,9 @@ function listFiles(dir, since, acc = []) {
   return acc;
 }
 
-// cache por arquivo: só relê o que mudou
+// cache por arquivo: lê só o que foi acrescentado desde a última vez (transcripts podem ter centenas de MB)
 const fileCache = new Map();
-function parseFile(f, since) {
-  const c = fileCache.get(f.p);
-  if (c && c.size === f.size && c.mtime === f.mtime) return c.entries;
-  const entries = [];
-  let text = "";
-  try { text = fs.readFileSync(f.p, "utf8"); } catch { return entries; }
+function parseLines(text, f, since, out) {
   for (const line of text.split("\n")) {
     if (!line.includes('"usage"')) continue;
     let o; try { o = JSON.parse(line); } catch { continue; }
@@ -53,14 +48,35 @@ function parseFile(f, since) {
     if (!u || o.type !== "assistant" || !msg.model || msg.model === "<synthetic>") continue;
     const t = Date.parse(o.timestamp);
     if (!t || t < since) continue;
-    entries.push({
+    out.push({
       key: `${msg.id || ""}:${o.requestId || ""}`, t, model: msg.model, session: o.sessionId || f.p,
       input: u.input_tokens || 0, output: u.output_tokens || 0,
       cw: u.cache_creation_input_tokens || 0, cr: u.cache_read_input_tokens || 0,
     });
   }
-  fileCache.set(f.p, { size: f.size, mtime: f.mtime, entries });
-  return entries;
+}
+function readRange(p, start, end) {
+  const fd = fs.openSync(p, "r");
+  try { const buf = Buffer.alloc(end - start); fs.readSync(fd, buf, 0, buf.length, start); return buf; } finally { fs.closeSync(fd); }
+}
+function parseFile(f, since) {
+  let c = fileCache.get(f.p);
+  if (c && c.size === f.size && c.mtime === f.mtime) return c.entries;
+  if (!c || f.size < c.offset) c = { offset: 0, entries: [], rest: Buffer.alloc(0) };
+  try {
+    if (f.size > c.offset) {
+      const chunk = Buffer.concat([c.rest, readRange(f.p, c.offset, f.size)]);
+      const lastNl = chunk.lastIndexOf(10);
+      const complete = lastNl >= 0 ? chunk.subarray(0, lastNl) : Buffer.alloc(0);
+      c.rest = lastNl >= 0 ? Buffer.from(chunk.subarray(lastNl + 1)) : chunk; // linha ainda sendo escrita
+      parseLines(complete.toString("utf8"), f, since, c.entries);
+      c.offset = f.size;
+    }
+  } catch { return c.entries; }
+  c.entries = c.entries.filter((e) => e.t >= since);
+  c.size = f.size; c.mtime = f.mtime;
+  fileCache.set(f.p, c);
+  return c.entries;
 }
 
 function startOfDay(t) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
