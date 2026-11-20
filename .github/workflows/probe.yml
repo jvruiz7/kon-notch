@@ -7,6 +7,10 @@ permissions:
 jobs:
   probe:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scale: ["1", "1.25"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,7 +29,7 @@ jobs:
           node node_modules/electron/install.js
           $exe = node -p "require('electron')"
           Write-Host "electron: $exe"
-          $p = Start-Process $exe -ArgumentList '.','--remote-debugging-port=9222' -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\e-out.txt" -RedirectStandardError "$env:RUNNER_TEMP\e-err.txt"
+          $p = Start-Process $exe -ArgumentList '.','--remote-debugging-port=9222',"--force-device-scale-factor=${{ matrix.scale }}" -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\e-out.txt" -RedirectStandardError "$env:RUNNER_TEMP\e-err.txt"
           Start-Sleep 20
           Write-Host "electron vivo: $(-not $p.HasExited)"; Get-Content "$env:RUNNER_TEMP\e-out.txt","$env:RUNNER_TEMP\e-err.txt" -ErrorAction SilentlyContinue | Select-Object -First 40
           node .github/probe/drive.js "$env:RUNNER_TEMP\probe"
@@ -39,7 +43,7 @@ jobs:
         run: |
           $o = "$env:RUNNER_TEMP\probe"
           Set-Location $o
-          git init -q -b probe-out
+          git init -q -b "probe-out-${{ matrix.scale }}"
           git config user.name "kon-probe"; git config user.email "probe@users.noreply.github.com"
           git add -A; git commit -qm "probe ${{ github.sha }}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" probe-out
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "probe-out-${{ matrix.scale }}"

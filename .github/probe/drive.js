@@ -14,6 +14,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
   await run(`Add-Type -AssemblyName System.Drawing,System.Windows.Forms; Add-Type 'using System;using System.Runtime.InteropServices;public class M{[DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);[DllImport("user32.dll")]public static extern void mouse_event(int f,int x,int y,int d,int e);[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();[DllImport("user32.dll")]public static extern int GetWindowText(IntPtr h,System.Text.StringBuilder s,int n);}'`);
   const move = (x, y) => run(`[M]::SetCursorPos(${Math.round(x)},${Math.round(y)})`);
+  const glide = async (x, y) => { for (let k = 6; k >= 0; k--) { await move(x + k * 9, y + k * 14); await sleep(25); } };
   const click = async (x, y) => { await move(x, y); await sleep(60); await run(`[M]::mouse_event(2,0,0,0,0); Start-Sleep -Milliseconds 40; [M]::mouse_event(4,0,0,0,0)`); };
   let shotN = 0;
   const shot = async (name) => { const f = path.join(OUT, `${String(++shotN).padStart(2, "0")}-${name}.png`); await run(`$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap 1100,620; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen([int](($b.Width-1100)/2),0,0,0,$bmp.Size); $bmp.Save('${f}'); $g.Dispose(); $bmp.Dispose()`); };
@@ -37,14 +38,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }, sel);
   const state = () => page.evaluate(() => {
     const t = document.body.innerText;
-    return { sheet: /Configurações|Arraste para reordenar/.test(t), panel: !!([...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações")), tab: ([...document.querySelectorAll("button")].find((b) => /bg-white|text-black/.test(b.className) && b.querySelector("svg") && b.innerText.trim().length > 2)?.innerText || "").trim().slice(0, 20) };
+    return { sheet: /Configurações|Arraste para reordenar/.test(t), panel: !!([...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações")), tab: (() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações"); if (!g) return ""; const nav = [...g.parentElement.parentElement.querySelectorAll("button")]; return (nav.find((b) => !b.title && b.innerText.trim().length > 2)?.innerText || "").trim(); })(), sheetTitle: (document.querySelector("h2,h3")?.innerText || "") };
   });
   const cx = win.x + win.w / 2;
   await shot("inicio");
 
   log("1) passa o mouse no notch");
-  await move(cx, win.y + 14); await sleep(700);
+  await glide(cx, win.y + 14); await sleep(700);
   log("estado", JSON.stringify(await state())); await shot("hover");
+  if (!(await state()).panel) { log("  (hover não abriu; clicando no notch)"); await click(cx, win.y + 14); await sleep(700); log("  ", JSON.stringify(await state())); }
 
   log("2) clica em cada página da barra");
   const navCount = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")] : []; return window.__nav.length; });
@@ -83,7 +85,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   log("4) clique fora (no Bloco de Notas) e volta");
   await click(cx + 500, 700); await sleep(800); log("  ", JSON.stringify(await state()), "fg:", await fg());
-  await move(cx, win.y + 14); await sleep(800); log("  hover de novo", JSON.stringify(await state())); await shot("hover2");
+  await glide(cx, win.y + 14); await sleep(800); log("  hover de novo", JSON.stringify(await state())); await shot("hover2");
 
   log("5) cliques rápidos alternando páginas (40 cliques)");
   const ids = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")].filter((b) => b.offsetParent && !b.title) : []; return window.__nav.length; });
