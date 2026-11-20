@@ -2377,7 +2377,7 @@ export default function KonIsland() {
               <Seg id="obProv" value={provider} onChange={(v) => switchProvider(v)} options={[["gemini", "Gemini"], ["claude", "Claude"]]} />
             </div>
             {provider === "gemini"
-              ? KeyField({ provider: "gemini", label: "GEMINI_API_KEY", placeholder: "AIza…", link: "https://aistudio.google.com/apikey", has: settings.hasGeminiKey })
+              ? KeyField({ provider: "gemini", label: "GEMINI_API_KEY", placeholder: "AQ.… ou AIza…", link: "https://aistudio.google.com/apikey", has: settings.hasGeminiKey })
               : KeyField({ provider: "anthropic", label: "ANTHROPIC_API_KEY", placeholder: "sk-ant-…", link: "https://console.anthropic.com/settings/keys", has: settings.hasAnthropicKey })}
             <div className="text-[10px] text-white/35">A chave fica criptografada pelo Windows, só neste computador.</div>
           </>)}
@@ -2464,7 +2464,7 @@ export default function KonIsland() {
           ))}
         </div>
       </div>
-      {KeyField({ provider: "gemini", label: "GEMINI_API_KEY", placeholder: "AIza…", link: "https://aistudio.google.com/apikey", has: settings.hasGeminiKey })}
+      {KeyField({ provider: "gemini", label: "GEMINI_API_KEY", placeholder: "AQ.… ou AIza…", link: "https://aistudio.google.com/apikey", has: settings.hasGeminiKey })}
       {KeyField({ provider: "anthropic", label: "ANTHROPIC_API_KEY", placeholder: "sk-ant-…", link: "https://console.anthropic.com/settings/keys", has: settings.hasAnthropicKey })}
       <div className="text-[10px] text-white/35 -mt-1">{settings.secure === false && REAL ? "Criptografia do sistema indisponível — chaves salvas localmente." : "Chaves criptografadas pelo Windows (safeStorage), só neste computador."}</div>
       <div className="grid grid-cols-2 gap-2">

@@ -127,9 +127,32 @@ function decryptKey(stored) {
   } catch {}
   return "";
 }
+// Campos que nunca saem do processo principal (nem para a interface, nem para o relatório).
+// Inclui chaves em texto puro deixadas por versões antigas (Sexta-feira / Nusa Notch).
+const SECRET_FIELD = /key|token|secret|senha|password/i;
+const SAFE_FIELDS = new Set(["hasGeminiKey", "hasAnthropicKey"]);
+function migrateLegacyKeys() {
+  const s = readSettings();
+  const legacy = Object.keys(s).filter((k) => SECRET_FIELD.test(k) && !/KeyEnc$/.test(k) && !SAFE_FIELDS.has(k));
+  if (!legacy.length) return;
+  const patch = {};
+  for (const k of legacy) {
+    const v = typeof s[k] === "string" ? s[k].trim() : "";
+    if (/gemini|google/i.test(k) && KEY_RE.gemini.test(v) && !decryptKey(s.geminiKeyEnc)) patch.geminiKeyEnc = encryptKey(v);
+    if (/anthropic|claude/i.test(k) && KEY_RE.anthropic.test(v) && !decryptKey(s.anthropicKeyEnc)) patch.anthropicKeyEnc = encryptKey(v);
+  }
+  const next = { ...s, ...patch };
+  for (const k of legacy) delete next[k];
+  try {
+    fs.writeFileSync(userFile("settings.json"), JSON.stringify(next, null, 2));
+    settingsCache = next;
+    console.log("chaves antigas migradas:", legacy.join(", "));
+  } catch (e) { console.warn("migrateLegacyKeys", e?.message || e); }
+}
 function publicSettings() {
   const s = readSettings();
   const { geminiKeyEnc, anthropicKeyEnc, ...rest } = s;
+  for (const k of Object.keys(rest)) if (SECRET_FIELD.test(k)) delete rest[k];
   return { ...rest, hasGeminiKey: !!decryptKey(geminiKeyEnc), hasAnthropicKey: !!decryptKey(anthropicKeyEnc), secure: safeStorage.isEncryptionAvailable() };
 }
 ipcMain.handle("settings:get", () => publicSettings());
@@ -151,7 +174,7 @@ function importEnvKeys() {
     const st = readSettings(), patch = {};
     const g = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
     const a = (process.env.ANTHROPIC_API_KEY || "").trim();
-    if (g && !decryptKey(st.geminiKeyEnc) && /^AIza/.test(g)) patch.geminiKeyEnc = encryptKey(g);
+    if (g && !decryptKey(st.geminiKeyEnc) && KEY_RE.gemini.test(g)) patch.geminiKeyEnc = encryptKey(g);
     if (a && !decryptKey(st.anthropicKeyEnc) && /^sk-ant-/.test(a)) patch.anthropicKeyEnc = encryptKey(a);
     if (Object.keys(patch).length) writeSettings(patch);
   } catch {}
@@ -699,7 +722,7 @@ function clipRead() { if (!clipList) { try { clipList = JSON.parse(fs.readFileSy
 function clipSave() { try { fs.writeFileSync(clipPath(), JSON.stringify(clipList)); } catch {} }
 function looksSecret(t) {
   const s = String(t || "").trim();
-  if (/^(sk-|sk_|pk_|rk_|AIza|ghp_|gho_|github_pat_|xox[abprs]-|glpat-|AKIA|ya29\.|eyJ[\w-]+\.[\w-]+\.)/.test(s)) return true;
+  if (/^(sk-|sk_|pk_|rk_|AIza|AQ\.Ab|ghp_|gho_|github_pat_|xox[abprs]-|glpat-|AKIA|ya29\.|eyJ[\w-]+\.[\w-]+\.)/.test(s)) return true;
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(s)) return true;
   const digits = s.replace(/[\s-]/g, "");
   if (/^\d{13,19}$/.test(digits)) return true; // número de cartão
@@ -714,7 +737,8 @@ function clipTick() {
   try { clipTickUnsafe(); } catch (e) { console.warn("clipboard", e?.message || e); }
 }
 // chave copiada do Google AI Studio ou do Console da Anthropic: o Kon oferece usar (a chave nunca vai para a interface)
-const KEY_RE = { gemini: /^AIza[0-9A-Za-z_-]{35}$/, anthropic: /^sk-ant-[0-9A-Za-z_-]{20,}$/ };
+// Gemini: formato antigo (AIza…) e o novo "auth key" do AI Studio (AQ.…), que o Google emite desde 2026
+const KEY_RE = { gemini: /^(AIza[0-9A-Za-z_-]{35}|AQ\.[0-9A-Za-z_.-]{30,200})$/, anthropic: /^sk-ant-[0-9A-Za-z_-]{20,}$/ };
 function detectKey(t) {
   const v = String(t || "").trim();
   const st = readSettings();
@@ -807,6 +831,7 @@ ipcMain.handle("report:make", async (_e, { note = "", withShot = false } = {}) =
     fs.mkdirSync(dir, { recursive: true });
     const pub = publicSettings();
     delete pub.icsUrl; // o link da agenda é secreto
+    for (const k of Object.keys(pub)) if (SECRET_FIELD.test(k) && !SAFE_FIELDS.has(k)) delete pub[k];
     const info = {
       versao: app.getVersion(), electron: process.versions.electron, windows: os.release(), arquitetura: process.arch,
       memoriaGB: +(os.totalmem() / 1024 ** 3).toFixed(1), helper: !!helper, telaCheia: fgState, atualizacao: updateStatus,
@@ -1202,6 +1227,7 @@ if (process.argv.includes("--remove-hooks")) {
   app.whenReady().then(() => {
     if (process.platform === "win32") app.setAppUserModelId("app.kon.desktop");
     session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(["media", "clipboard-sanitized-write", "geolocation"].includes(permission)));
+    migrateLegacyKeys(); // chave em texto puro de versões antigas → cofre do Windows
     createWindow();
     hitTestLoop();
     registerShortcuts();
