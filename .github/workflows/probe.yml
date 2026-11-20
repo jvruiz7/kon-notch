@@ -22,7 +22,9 @@ jobs:
         shell: pwsh
         run: |
           npm i --no-save playwright-core@1 | Out-Null
-          $exe = Resolve-Path 'node_modules\electron\dist\electron.exe'
+          node node_modules/electron/install.js
+          $exe = node -p "require('electron')"
+          Write-Host "electron: $exe"
           $p = Start-Process $exe -ArgumentList '.','--remote-debugging-port=9222' -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\e-out.txt" -RedirectStandardError "$env:RUNNER_TEMP\e-err.txt"
           Start-Sleep 20
           Write-Host "electron vivo: $(-not $p.HasExited)"; Get-Content "$env:RUNNER_TEMP\e-out.txt","$env:RUNNER_TEMP\e-err.txt" -ErrorAction SilentlyContinue | Select-Object -First 40
