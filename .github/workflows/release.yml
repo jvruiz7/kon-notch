@@ -1,6 +1,6 @@
-# Publica uma versão nova do Kon: quando a "version" do package.json muda no main (ou com tag v*),
-# o GitHub compila o instalador e cria a Release v<versão> com Kon-Setup-<versão>.exe + latest.yml.
-# Os apps instalados encontram a versão nova e se atualizam sozinhos.
+# Publica uma versão nova do Kon quando a "version" do package.json muda no main (ou com tag v*).
+# 1) compila o instalador no Linux; 2) testa num Windows de verdade (instala, abre, atualiza em
+# silêncio, remove os hooks e desinstala); 3) só então cria a Release v<versão>.
 name: Release
 
 on:
@@ -16,6 +16,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.v }}
+      skip: ${{ steps.check.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
       - name: Versão já publicada?
@@ -41,21 +44,100 @@ jobs:
       - name: Instalador
         if: steps.check.outputs.skip != '1'
         run: npm run installer
-      - name: Release
+      - uses: actions/upload-artifact@v4
         if: steps.check.outputs.skip != '1'
+        with:
+          name: kon-release
+          path: |
+            release/Kon-Setup-*.exe
+            release/latest.yml
+            release/kon-patch.json
+            release/app-*.asar.gz
+          retention-days: 7
+
+  test-windows:
+    needs: build
+    if: needs.build.outputs.skip != '1'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kon-release
+          path: release
+      - name: Instalar, abrir, atualizar em silêncio, remover hooks e desinstalar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $v = '${{ needs.build.outputs.version }}'
+          $setup = Resolve-Path "release/Kon-Setup-$v.exe"
+          $dir = Join-Path $env:LOCALAPPDATA 'Programs\Kon'
+          $exe = Join-Path $dir 'Kon.exe'
+          $data = Join-Path $env:APPDATA 'Kon'
+          function Fail($m) { Write-Host "::error::$m"; Get-ChildItem $data -ErrorAction SilentlyContinue | Out-String | Write-Host; foreach ($f in 'kon-error.log','kon-update.log') { $p = Join-Path $data $f; if (Test-Path $p) { Write-Host "--- $f"; Get-Content $p -Tail 60 } }; exit 1 }
+          function KonRunning { @(Get-Process -Name Kon -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe }).Count -gt 0 }
+
+          Write-Host '1) instalação silenciosa'
+          Start-Process $setup -ArgumentList '/S' -Wait
+          if (-not (Test-Path $exe)) { Fail 'Kon.exe não foi instalado' }
+          if (-not (Test-Path (Join-Path $dir 'Desinstalar Kon.exe'))) { Fail 'desinstalador não foi criado' }
+
+          Write-Host '2) abrir e esperar 25 s'
+          Start-Process $exe
+          Start-Sleep 25
+          if (-not (KonRunning)) { Fail 'o Kon fechou sozinho depois de abrir' }
+          if (-not (Test-Path (Join-Path $data 'kon-helper.ps1'))) { Fail 'o helper não foi iniciado' }
+          $err = Join-Path $data 'kon-error.log'
+          if ((Test-Path $err) -and (Get-Item $err).Length -gt 0) { Fail 'o Kon registrou erros ao abrir' }
+          try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47321/claude' -Method Post -Body '{"hook_event_name":"Stop"}' -TimeoutSec 5; if ($r.StatusCode -ne 200) { Fail 'servidor do Claude Code respondeu errado' } } catch { Fail "servidor do Claude Code não respondeu: $_" }
+
+          Write-Host '3) atualização silenciosa com o Kon aberto (como faz o atualizador)'
+          $p = Start-Process $setup -ArgumentList '--updated','/S','--force-run' -PassThru
+          $p.WaitForExit(120000) | Out-Null
+          if ($p.ExitCode -ne 0) { Fail "instalador da atualização saiu com código $($p.ExitCode)" }
+          Start-Sleep 15
+          if (-not (KonRunning)) { Fail 'o Kon não reabriu depois da atualização' }
+          if (-not (Test-Path (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Kon.lnk'))) { Fail 'atalho do Menu Iniciar sumiu' }
+
+          Write-Host '4) remover só os hooks do Kon do Claude Code'
+          $cs = Join-Path $env:USERPROFILE '.claude\settings.json'
+          New-Item -ItemType Directory -Force (Split-Path $cs) | Out-Null
+          '{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo oi"}]},{"hooks":[{"type":"http","url":"http://127.0.0.1:47321/claude","timeout":2}]}]}}' | Set-Content $cs
+          Get-Process -Name Kon -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 2
+          Start-Process $exe -ArgumentList '--remove-hooks' -Wait
+          $j = Get-Content $cs -Raw | ConvertFrom-Json
+          if ($j.model -ne 'opus' -or @($j.hooks.Stop).Count -ne 1 -or ($j | ConvertTo-Json -Depth 8) -match '47321') { Fail '--remove-hooks não limpou certo' }
+
+          Write-Host '5) desinstalar'
+          Start-Process (Join-Path $dir 'Desinstalar Kon.exe') -ArgumentList '/S' -Wait
+          Start-Sleep 8
+          if (Test-Path $exe) { Fail 'desinstalação deixou o Kon.exe' }
+          if (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\app.kon.desktop' -ErrorAction SilentlyContinue) { Fail 'entrada de desinstalação ficou no registro' }
+          Write-Host 'Tudo certo no Windows.'
+
+  publish:
+    needs: [build, test-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: kon-release
+          path: release
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          V=$(node -p "require('./package.json').version")
+          V='${{ needs.build.outputs.version }}'
           TAG="v$V"
           if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "$TAG" ]; then
             echo "A tag ${GITHUB_REF_NAME} não bate com a versão do package.json ($V)"; exit 1
           fi
           NOTES=".github/release-notes/$TAG.md"
           if [ -f "$NOTES" ]; then ARGS="--notes-file $NOTES"; else ARGS="--generate-notes"; fi
-          git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
+          FILES="release/Kon-Setup-$V.exe release/latest.yml release/kon-patch.json release/app-$V.asar.gz"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "release/Kon-Setup-$V.exe" release/latest.yml --clobber
+            gh release upload "$TAG" $FILES --clobber
           else
-            gh release create "$TAG" "release/Kon-Setup-$V.exe" release/latest.yml --title "Kon $V" --target "$GITHUB_SHA" $ARGS
+            gh release create "$TAG" $FILES --title "Kon $V" --target "$GITHUB_SHA" $ARGS
           fi

@@ -21,4 +21,13 @@ const fs=require("fs"),c=require("crypto");const [v,f]=process.argv.slice(1);
 const b=fs.readFileSync(f);const sha=c.createHash("sha512").update(b).digest("base64");const name=f.split("/").pop();
 fs.writeFileSync("release/latest.yml",`version: ${v}\nfiles:\n  - url: ${name}\n    sha512: ${sha}\n    size: ${b.length}\npath: ${name}\nsha512: ${sha}\nreleaseDate: '"'"'${new Date().toISOString()}'"'"'\n`);
 ' "$V" "$OUT"
-ls -la "$OUT" release/latest.yml
+# pacote pequeno (só o app.asar compactado) para atualizar sem baixar o instalador inteiro
+node -e '
+const fs=require("fs"),c=require("crypto"),z=require("zlib");const v=process.argv[1];
+const asar=fs.readFileSync("release/win-unpacked/resources/app.asar");
+const gz=z.gzipSync(asar,{level:9});const file=`app-${v}.asar.gz`;
+fs.writeFileSync(`release/${file}`,gz);
+const electron=require("./node_modules/electron/package.json").version;
+fs.writeFileSync("release/kon-patch.json",JSON.stringify({version:v,electron,file,size:gz.length,sha512:c.createHash("sha512").update(asar).digest("base64")},null,2));
+' "$V"
+ls -la "$OUT" release/latest.yml release/kon-patch.json "release/app-$V.asar.gz"

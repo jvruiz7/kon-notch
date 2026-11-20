@@ -99,6 +99,297 @@ public class KonFg {
   $fgOk = $true
 } catch { Emit @{ type = 'error'; scope = 'fg'; message = $_.Exception.Message } }
 
+# ───────── Saídas de áudio e volume por app (Core Audio) ─────────
+$mixOk = $false
+try {
+  Add-Type -Language CSharp -TypeDefinition @"
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+[StructLayout(LayoutKind.Sequential)] public struct KAPropKey { public Guid fmtid; public int pid; }
+[StructLayout(LayoutKind.Explicit, Size = 24)] public struct KAPropVar { [FieldOffset(0)] public short vt; [FieldOffset(8)] public IntPtr p; }
+
+[Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIPropertyStore {
+  int GetCount(out int c);
+  int GetAt(int i, out KAPropKey k);
+  int GetValue(ref KAPropKey k, out KAPropVar v);
+}
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIMMDevice {
+  int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o);
+  int OpenPropertyStore(int access, out KAIPropertyStore store);
+  int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
+  int GetState(out int state);
+}
+[Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIMMDeviceCollection {
+  int GetCount(out int c);
+  int Item(int i, out KAIMMDevice d);
+}
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIMMDeviceEnumerator {
+  int EnumAudioEndpoints(int flow, int mask, out KAIMMDeviceCollection col);
+  int GetDefaultAudioEndpoint(int flow, int role, out KAIMMDevice d);
+}
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] class KAEnumerator { }
+
+[Guid("F8679F50-850A-41CF-9C72-430F290290C8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIPolicyConfig {
+  int a1(); int a2(); int a3(); int a4(); int a5(); int a6(); int a7(); int a8(); int a9(); int a10();
+  int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string id, int role);
+}
+[ComImport, Guid("870af99c-171d-4f9e-af0d-e63df40c5bc9")] class KAPolicyConfigClient { }
+
+[Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAISimpleAudioVolume {
+  int SetMasterVolume(float v, ref Guid ctx);
+  int GetMasterVolume(out float v);
+  int SetMute([MarshalAs(UnmanagedType.Bool)] bool m, ref Guid ctx);
+  int GetMute([MarshalAs(UnmanagedType.Bool)] out bool m);
+}
+[Guid("bfb7ff88-7239-4fc9-8fa2-07c950be9c6d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIAudioSessionControl2 {
+  int GetState(out int s);
+  int GetDisplayName([MarshalAs(UnmanagedType.LPWStr)] out string n);
+  int SetDisplayName([MarshalAs(UnmanagedType.LPWStr)] string n, ref Guid ctx);
+  int GetIconPath([MarshalAs(UnmanagedType.LPWStr)] out string p);
+  int SetIconPath([MarshalAs(UnmanagedType.LPWStr)] string p, ref Guid ctx);
+  int GetGroupingParam(out Guid g);
+  int SetGroupingParam(ref Guid g, ref Guid ctx);
+  int RegisterAudioSessionNotification(IntPtr n);
+  int UnregisterAudioSessionNotification(IntPtr n);
+  int GetSessionIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+  int GetSessionInstanceIdentifier([MarshalAs(UnmanagedType.LPWStr)] out string id);
+  int GetProcessId(out uint pid);
+  [PreserveSig] int IsSystemSoundsSession();
+}
+[Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIAudioSessionEnumerator {
+  int GetCount(out int c);
+  int GetSession(int i, out KAIAudioSessionControl2 s);
+}
+[Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface KAIAudioSessionManager2 {
+  int GetAudioSessionControl(IntPtr g, int f, out IntPtr c);
+  int GetSimpleAudioVolume(IntPtr g, int f, out IntPtr v);
+  int GetSessionEnumerator(out KAIAudioSessionEnumerator e);
+}
+
+public class KonMix {
+  static KAIMMDeviceEnumerator En() { return (KAIMMDeviceEnumerator)(new KAEnumerator()); }
+  static string Name(KAIMMDevice d) {
+    try {
+      KAIPropertyStore st; d.OpenPropertyStore(0, out st);
+      var k = new KAPropKey { fmtid = new Guid("a45c254e-df1c-4efd-8020-67d146a850e0"), pid = 14 };
+      KAPropVar v; st.GetValue(ref k, out v);
+      if (v.vt == 31 && v.p != IntPtr.Zero) return Marshal.PtrToStringUni(v.p);
+    } catch { }
+    return "Dispositivo";
+  }
+  public static string DefaultId() {
+    KAIMMDevice d; En().GetDefaultAudioEndpoint(0, 1, out d);
+    string id; d.GetId(out id); return id;
+  }
+  // "id\tnome" por linha, só saídas ativas
+  public static string[] Devices() {
+    var list = new List<string>();
+    KAIMMDeviceCollection col; En().EnumAudioEndpoints(0, 1, out col);
+    int n; col.GetCount(out n);
+    for (int i = 0; i < n; i++) { KAIMMDevice d; col.Item(i, out d); string id; d.GetId(out id); list.Add(id + "\t" + Name(d)); }
+    return list.ToArray();
+  }
+  public static void SetDefault(string id) {
+    var pc = (KAIPolicyConfig)(new KAPolicyConfigClient());
+    for (int role = 0; role < 3; role++) pc.SetDefaultEndpoint(id, role);
+  }
+  static List<KeyValuePair<uint, KAISimpleAudioVolume>> Sessions() {
+    var res = new List<KeyValuePair<uint, KAISimpleAudioVolume>>();
+    KAIMMDevice d; En().GetDefaultAudioEndpoint(0, 1, out d);
+    Guid iid = typeof(KAIAudioSessionManager2).GUID; object o;
+    d.Activate(ref iid, 23, IntPtr.Zero, out o);
+    var mgr = (KAIAudioSessionManager2)o;
+    KAIAudioSessionEnumerator e; mgr.GetSessionEnumerator(out e);
+    int n; e.GetCount(out n);
+    for (int i = 0; i < n; i++) {
+      try {
+        KAIAudioSessionControl2 c; e.GetSession(i, out c);
+        int state; c.GetState(out state);
+        if (state == 2) continue; // expirada
+        uint pid; c.GetProcessId(out pid);
+        res.Add(new KeyValuePair<uint, KAISimpleAudioVolume>(pid, (KAISimpleAudioVolume)c));
+      } catch { }
+    }
+    return res;
+  }
+  // "pid\tvolume\tmudo" por sessão
+  public static string[] Apps() {
+    var list = new List<string>();
+    foreach (var s in Sessions()) {
+      try { float v; bool m; s.Value.GetMasterVolume(out v); s.Value.GetMute(out m); list.Add(s.Key + "\t" + Math.Round(v * 100) + "\t" + (m ? 1 : 0)); } catch { }
+    }
+    return list.ToArray();
+  }
+  public static void SetApp(uint[] pids, int vol, int mute) {
+    var g = Guid.Empty;
+    foreach (var s in Sessions()) {
+      if (Array.IndexOf(pids, s.Key) < 0) continue;
+      try { if (vol >= 0) s.Value.SetMasterVolume(Math.Max(0, Math.Min(100, vol)) / 100f, ref g); if (mute >= 0) s.Value.SetMute(mute == 1, ref g); } catch { }
+    }
+  }
+}
+"@
+  $mixOk = $true
+} catch { Emit @{ type = 'error'; scope = 'mix'; message = $_.Exception.Message } }
+
+function Invoke-Mix($c) {
+  if (-not $mixOk) { Emit @{ type = 'mix'; id = $c.id; ok = $false }; return }
+  try {
+    if ($c.cmd -eq 'setdev') { [KonMix]::SetDefault([string]$c.value) }
+    elseif ($c.cmd -eq 'appvol') { [KonMix]::SetApp([uint32[]]@($c.pids), [int]$c.volume, -1) }
+    elseif ($c.cmd -eq 'appmute') { [KonMix]::SetApp([uint32[]]@($c.pids), -1, [int]$c.mute) }
+    $def = ''; try { $def = [KonMix]::DefaultId() } catch {}
+    $devs = @(); foreach ($l in [KonMix]::Devices()) { $p = $l -split "`t", 2; $devs += @{ id = $p[0]; name = $p[1]; default = ($p[0] -eq $def) } }
+    $apps = @{}
+    foreach ($l in [KonMix]::Apps()) {
+      $p = $l -split "`t"; $procId = [int]$p[0]
+      $name = 'Sons do sistema'; $title = ''
+      if ($procId -ne 0) { try { $pr = Get-Process -Id $procId -ErrorAction Stop; $name = $pr.ProcessName; try { $title = $pr.MainModule.FileVersionInfo.FileDescription } catch {} } catch { continue } }
+      if (-not $title) { $title = $name }
+      if ($apps.ContainsKey($name)) { $apps[$name].pids += $procId }
+      else { $apps[$name] = @{ name = $name; title = $title; pids = @($procId); volume = [int]$p[1]; muted = ($p[2] -eq '1') } }
+    }
+    Emit @{ type = 'mix'; id = $c.id; ok = $true; devices = @($devs); apps = @($apps.Values) }
+  } catch { Emit @{ type = 'mix'; id = $c.id; ok = $false; error = $_.Exception.Message } }
+}
+
+# ───────── Não incomodar do Windows (Assistente de foco, via WNF) e processos ─────────
+$dndOk = $false
+try {
+  Add-Type -Language CSharp -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class KonDnd {
+  [DllImport("ntdll.dll")] static extern int ZwUpdateWnfStateData(ref ulong name, byte[] buf, int len, IntPtr type, IntPtr scope, uint match, uint check);
+  [DllImport("ntdll.dll")] static extern int ZwQueryWnfStateData(ref ulong name, IntPtr type, IntPtr scope, out uint stamp, byte[] buf, ref int size);
+  const ulong QUIET = 0x0D83063EA3BF1C75; // WNF_SHEL_QUIETHOURS_ACTIVE_PROFILE_CHANGED
+  public static int Get() {
+    ulong n = QUIET; uint stamp; var b = new byte[4]; int size = 4;
+    int r = ZwQueryWnfStateData(ref n, IntPtr.Zero, IntPtr.Zero, out stamp, b, ref size);
+    return r == 0 ? BitConverter.ToInt32(b, 0) : -1;
+  }
+  // 0 = desligado, 1 = só prioridade, 2 = só alarmes
+  public static bool Set(int mode) {
+    ulong n = QUIET; var b = BitConverter.GetBytes(mode);
+    return ZwUpdateWnfStateData(ref n, b, 4, IntPtr.Zero, IntPtr.Zero, 0, 0) == 0;
+  }
+}
+"@
+  $dndOk = $true
+} catch { Emit @{ type = 'error'; scope = 'dnd'; message = $_.Exception.Message } }
+
+$script:procPrev = @{}
+$script:procAt = [DateTime]::UtcNow
+function Invoke-Procs($c) {
+  try {
+    $now = [DateTime]::UtcNow
+    $secs = [Math]::Max(0.5, ($now - $script:procAt).TotalSeconds)
+    $cores = [Environment]::ProcessorCount
+    $agg = @{}
+    foreach ($p in Get-Process -ErrorAction SilentlyContinue) {
+      if ($p.Id -eq 0 -or $p.Id -eq 4) { continue }
+      $cpu = 0; try { $cpu = $p.TotalProcessorTime.TotalSeconds } catch { continue }
+      $prev = $script:procPrev[$p.Id]
+      $delta = 0; if ($null -ne $prev) { $delta = [Math]::Max(0, $cpu - $prev) }
+      $script:procPrev[$p.Id] = $cpu
+      $n = $p.ProcessName
+      if (-not $agg.ContainsKey($n)) { $agg[$n] = @{ name = $n; cpu = 0.0; mem = 0 } }
+      $agg[$n].cpu += $delta; $agg[$n].mem += $p.WorkingSet64
+    }
+    $script:procAt = $now
+    $top = @($agg.Values | ForEach-Object { @{ name = $_.name; cpu = [Math]::Round(100 * $_.cpu / $secs / $cores, 1); mem = [Math]::Round($_.mem / 1MB) } } | Sort-Object { -$_.cpu } | Select-Object -First 4)
+    $topMem = @($agg.Values | Sort-Object { -$_.mem } | Select-Object -First 1 | ForEach-Object { @{ name = $_.name; mem = [Math]::Round($_.mem / 1MB) } })
+    Emit @{ type = 'procs'; id = $c.id; top = $top; topMem = $topMem }
+  } catch { Emit @{ type = 'procs'; id = $c.id; top = @(); error = $_.Exception.Message } }
+}
+
+# ───────── Palavra de ativação "Kon" (reconhecimento de voz do Windows, offline) ─────────
+$wakeOk = $false
+try {
+  Add-Type -ReferencedAssemblies System.Speech -Language CSharp -TypeDefinition @"
+using System;
+using System.Globalization;
+using System.Speech.Recognition;
+public class KonWake {
+  static SpeechRecognitionEngine eng;
+  static int hits;
+  static float minConf = 0.6f;
+  public static string Info() {
+    var list = new System.Collections.Generic.List<string>();
+    foreach (var r in SpeechRecognitionEngine.InstalledRecognizers()) list.Add(r.Culture.Name);
+    return string.Join(",", list.ToArray());
+  }
+  public static string Start(float conf) {
+    Stop();
+    minConf = conf;
+    RecognizerInfo pick = null;
+    foreach (var r in SpeechRecognitionEngine.InstalledRecognizers()) {
+      if (r.Culture.Name == "pt-BR") { pick = r; break; }
+      if (pick == null || r.Culture.Name == "en-US") pick = r;
+    }
+    if (pick == null) return "sem-reconhecedor";
+    eng = new SpeechRecognitionEngine(pick);
+    var gb = new GrammarBuilder(new Choices(new string[] { "Kon", "Hey Kon", "Ok Kon", "Oi Kon" }));
+    gb.Culture = pick.Culture;
+    eng.LoadGrammar(new Grammar(gb));
+    // um pouco de "lixo" para não confundir qualquer som com a palavra
+    var junk = new GrammarBuilder(new Choices(new string[] { "on", "come", "can", "cone", "done", "gone", "John", "corn", "con" }));
+    junk.Culture = pick.Culture;
+    var jg = new Grammar(junk); jg.Name = "junk"; eng.LoadGrammar(jg);
+    eng.SpeechRecognized += (s, e) => { if (e.Result.Grammar.Name != "junk" && e.Result.Confidence >= minConf) hits++; };
+    eng.SetInputToDefaultAudioDevice();
+    eng.RecognizeAsync(RecognizeMode.Multiple);
+    return "ok:" + pick.Culture.Name;
+  }
+  public static void Stop() { try { if (eng != null) { eng.RecognizeAsyncCancel(); eng.Dispose(); } } catch { } eng = null; hits = 0; }
+  public static int Poll() { int h = hits; hits = 0; return h; }
+}
+"@
+  $wakeOk = $true
+} catch { Emit @{ type = 'error'; scope = 'wake'; message = $_.Exception.Message } }
+$script:wakeOn = $false
+
+# ───────── Teclado: copiar/colar no app em primeiro plano (ações no texto selecionado) ─────────
+$keysOk = $false
+try {
+  Add-Type -Language CSharp -TypeDefinition @"
+using System;
+using System.Threading;
+using System.Runtime.InteropServices;
+public class KonKeys {
+  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+  [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  const uint UP = 2;
+  static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+  // espera você soltar Ctrl/Alt/Shift/Win do atalho, senão o Ctrl+C vira Ctrl+Alt+C
+  public static void WaitModifiers(int ms) {
+    int waited = 0;
+    while (waited < ms && (Down(0x10) || Down(0x11) || Down(0x12) || Down(0x5B) || Down(0x5C))) { Thread.Sleep(15); waited += 15; }
+    foreach (byte k in new byte[] { 0x12, 0x10, 0x5B }) if (Down(k)) keybd_event(k, 0, UP, UIntPtr.Zero);
+  }
+  public static void Ctrl(byte vk) {
+    keybd_event(0x11, 0, 0, UIntPtr.Zero);
+    keybd_event(vk, 0, 0, UIntPtr.Zero);
+    Thread.Sleep(20);
+    keybd_event(vk, 0, UP, UIntPtr.Zero);
+    keybd_event(0x11, 0, UP, UIntPtr.Zero);
+  }
+}
+"@
+  $keysOk = $true
+} catch { Emit @{ type = 'error'; scope = 'keys'; message = $_.Exception.Message } }
+
 # ───────── Microfone / câmera em uso (ConsentStore do Windows) ─────────
 function Get-InUse($cap) {
   $base = "HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\$cap"
@@ -262,6 +553,32 @@ function Invoke-Ocr($c) {
 
 function Invoke-Cmd($c) {
   if ($c.cmd -eq 'ocr') { Invoke-Ocr $c; return }
+  if (@('mix', 'setdev', 'appvol', 'appmute') -contains $c.cmd) { Invoke-Mix $c; return }
+  if ($c.cmd -eq 'procs') { Invoke-Procs $c; return }
+  if ($c.cmd -eq 'wake') {
+    if (-not $wakeOk) { Emit @{ type = 'wakeinfo'; id = $c.id; ok = $false; error = 'O reconhecimento de voz do Windows não está disponível' }; return }
+    try {
+      if ($c.on) { $r = [KonWake]::Start([float]$c.conf); $script:wakeOn = $r.StartsWith('ok'); Emit @{ type = 'wakeinfo'; id = $c.id; ok = $script:wakeOn; result = $r; recognizers = [KonWake]::Info() } }
+      else { [KonWake]::Stop(); $script:wakeOn = $false; Emit @{ type = 'wakeinfo'; id = $c.id; ok = $true } }
+    } catch { $script:wakeOn = $false; Emit @{ type = 'wakeinfo'; id = $c.id; ok = $false; error = $_.Exception.Message } }
+    return
+  }
+  if ($c.cmd -eq 'dnd') {
+    if (-not $dndOk) { Emit @{ type = 'dnd'; id = $c.id; ok = $false }; return }
+    $prev = [KonDnd]::Get(); $ok = $true
+    if ($null -ne $c.mode) { $ok = [KonDnd]::Set([int]$c.mode) }
+    Emit @{ type = 'dnd'; id = $c.id; ok = $ok; prev = $prev; now = [KonDnd]::Get() }
+    return
+  }
+  if ($c.cmd -eq 'copysel' -or $c.cmd -eq 'paste') {
+    if (-not $keysOk) { Emit @{ type = 'keys'; id = $c.id; ok = $false }; return }
+    try {
+      [KonKeys]::WaitModifiers(1200)
+      if ($c.cmd -eq 'copysel') { [KonKeys]::Ctrl(0x43) } else { [KonKeys]::Ctrl(0x56) }
+      Emit @{ type = 'keys'; id = $c.id; ok = $true }
+    } catch { Emit @{ type = 'keys'; id = $c.id; ok = $false } }
+    return
+  }
   if (-not $mediaOk) { return }
   $s = $mgr.GetCurrentSession()
   if ($null -eq $s) { return }
@@ -314,6 +631,7 @@ while ($true) {
     } catch { [KonAudio]::Reset() }
   }
   Emit-Media
+  if ($script:wakeOn) { try { if ([KonWake]::Poll() -gt 0) { Emit @{ type = 'wake' } } } catch {} }
   if ($fgOk -and $script:tick % 2 -eq 0) {
     try {
       $st = [KonFg]::State()

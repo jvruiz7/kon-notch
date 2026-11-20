@@ -6,3 +6,6 @@ html, body, #root { margin: 0; height: 100%; background: transparent; overflow: 
 body { -webkit-font-smoothing: antialiased; user-select: none; }
 input, textarea { user-select: text; }
 ::-webkit-scrollbar { width: 0; height: 0; }
+
+.kon-range{-webkit-appearance:none;appearance:none;height:4px;border-radius:9999px;background:rgba(255,255,255,.18);outline:none}
+.kon-range::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:9999px;background:#fff;cursor:pointer}

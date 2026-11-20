@@ -5,7 +5,7 @@
 
 const {
   app, BrowserWindow, globalShortcut, ipcMain, screen, desktopCapturer, Tray, Menu,
-  nativeImage, clipboard, shell, safeStorage, session,
+  nativeImage, clipboard, shell, safeStorage, session, Notification,
 } = require("electron");
 const path = require("path");
 const fs = require("fs");
@@ -39,6 +39,16 @@ let fgState = { full: false, max: false };
 let hiddenForFullscreen = false;
 const pendingPerms = new Map(); // pedidos de permissão do Claude Code aguardando você
 const pendingOcr = new Map();
+const pendingHelper = new Map(); // respostas do helper por id (teclado, áudio, sistema)
+function helperCall(cmd, timeout = 3000) {
+  return new Promise((resolve) => {
+    if (!helper) return resolve(null);
+    const id = crypto.randomUUID();
+    const t = setTimeout(() => { pendingHelper.delete(id); resolve(null); }, timeout);
+    pendingHelper.set(id, (m) => { clearTimeout(t); resolve(m); });
+    try { helper.stdin.write(JSON.stringify({ ...cmd, id }) + "\n"); } catch { clearTimeout(t); resolve(null); }
+  });
+}
 const aiControllers = new Map();
 
 // Nenhum erro inesperado do processo principal deve virar caixa de diálogo: registra em kon-error.log
@@ -70,6 +80,12 @@ const DEFAULTS = {
   icsUrl: "",
   clipboardOn: true,
   autoUpdate: true,
+  sysAlerts: true,          // avisa quando CPU/memória ficam no limite por 30 s
+  focusDnd: true,           // liga o Não incomodar do Windows durante o Focus
+  wakeWord: false,          // "Kon" abre o Perguntar já ouvindo (reconhecimento de voz do Windows)
+  wakeConf: 0.6,
+  accent: "aurora",
+  glow: 1,
   onboarded: false,
   geminiKeyEnc: "",
   anthropicKeyEnc: "",
@@ -119,6 +135,7 @@ ipcMain.handle("settings:set", (_e, patch = {}) => {
   if ("display" in clean) placeWindow();
   if ("hideFullscreen" in clean) applyFullscreen();
   if ("icsUrl" in clean) calCache = null;
+  if ("wakeWord" in clean || "wakeConf" in clean) applyWake();
   if ("clipboardOn" in clean && !clean.clipboardOn) clipLast = readClipText();
   return publicSettings();
 });
@@ -306,11 +323,18 @@ function startHelper() {
       if (msg.type === "media") send("media:state", msg);
       else if (msg.type === "volume") send("volume:state", msg);
       else if (msg.type === "fg") onForeground(msg);
-      else if (msg.type === "privacy") send("privacy:state", { mic: [].concat(msg.mic || []).filter(Boolean), cam: [].concat(msg.cam || []).filter(Boolean) });
+      else if (msg.type === "wake") { if (!pinned) { focusKon(); send("shortcut", "wake"); } }
+      else if (msg.id && pendingHelper.has(msg.id)) { const p = pendingHelper.get(msg.id); pendingHelper.delete(msg.id); p(msg); }
+      else if (msg.type === "privacy") {
+        // com a palavra de ativação ligada, o próprio Kon (via PowerShell) usa o microfone: não conta
+        const wake = readSettings().wakeWord;
+        const own = (n) => /^kon$/i.test(n) || (wake && /^powershell$/i.test(n));
+        send("privacy:state", { mic: [].concat(msg.mic || []).filter((n) => n && !own(n)), cam: [].concat(msg.cam || []).filter(Boolean) });
+      }
       else if (msg.type === "ocr") {
         const p = pendingOcr.get(msg.id);
         if (p) { pendingOcr.delete(msg.id); msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg.text || ""); }
-      } else if (msg.type === "ready") { helperRestarts = 0; send("helper:ready", msg); }
+      } else if (msg.type === "ready") { helperRestarts = 0; send("helper:ready", msg); applyWake(); }
       else if (msg.type === "error") console.warn("[kon-helper]", msg.scope, msg.message);
     }
   });
@@ -341,7 +365,7 @@ function onForeground(m) {
 }
 function applyFullscreen() {
   if (!win || win.isDestroyed()) return;
-  const hide = fgState.full && readSettings().hideFullscreen !== false && pendingPerms.size === 0 && !pinned;
+  const hide = fgState.full && readSettings().hideFullscreen !== false && pendingPerms.size === 0 && dueReminders === 0 && !pinned;
   if (hide && !hiddenForFullscreen) { hiddenForFullscreen = true; win.hide(); }
   else if (!hide && hiddenForFullscreen) { hiddenForFullscreen = false; win.showInactive(); }
 }
@@ -668,7 +692,7 @@ function clipTick() {
   try { clipTickUnsafe(); } catch (e) { console.warn("clipboard", e?.message || e); }
 }
 function clipTickUnsafe() {
-  if (readSettings().clipboardOn === false) return;
+  if (readSettings().clipboardOn === false || Date.now() < clipSuspendUntil) return;
   const t = readClipText();
   if (!t || t === clipLast) return;
   clipLast = t;
@@ -685,6 +709,234 @@ ipcMain.handle("clip:copy", (_e, id) => { const it = clipRead().find((x) => x.id
 ipcMain.handle("clip:remove", (_e, id) => { clipList = clipRead().filter((x) => x.id !== id); clipSave(); return clipList; });
 ipcMain.handle("clip:pin", (_e, id) => { clipList = clipRead().map((x) => (x.id === id ? { ...x, pinned: !x.pinned } : x)); clipSave(); return clipList; });
 ipcMain.handle("clip:clear", () => { clipList = clipRead().filter((x) => x.pinned); clipSave(); return clipList; });
+
+/* ═════════ Ações no texto selecionado (Ctrl+Alt+R) ═════════ */
+// Copia a seleção do app em primeiro plano, devolve sua área de transferência como estava e abre o menu
+// de ações no notch. "Colar" escreve o resultado e manda Ctrl+V para o mesmo app (o Kon não rouba o foco).
+let clipSuspendUntil = 0;
+async function grabSelection() {
+  if (!helper) return send("textact:open", { text: "", error: "Só funciona no Windows" });
+  const before = readClipText();
+  clipSuspendUntil = Date.now() + 2500;
+  try { clipboard.writeText(""); } catch {}
+  await helperCall({ cmd: "copysel" }, 2500);
+  let text = "";
+  for (let i = 0; i < 20 && !text; i++) { await new Promise((r) => setTimeout(r, 40)); text = readClipText(); }
+  try { clipboard.writeText(before); } catch {}
+  clipLast = before;
+  send("textact:open", text.trim() ? { text: text.slice(0, 12000) } : { text: "", error: "Selecione um texto em qualquer programa e aperte Ctrl+Alt+R" });
+}
+ipcMain.handle("textact:paste", async (_e, text) => {
+  clipSuspendUntil = Date.now() + 1500;
+  clipboard.writeText(String(text || ""));
+  clipLast = String(text || "");
+  const r = await helperCall({ cmd: "paste" }, 2500);
+  return !!r?.ok;
+});
+
+/* ═════════ Palavra de ativação "Kon" ═════════ */
+let wakeState = { on: false };
+async function applyWake() {
+  const st = readSettings();
+  const r = await helperCall({ cmd: "wake", on: !!st.wakeWord, conf: st.wakeConf || 0.6 }, 8000);
+  wakeState = { on: !!(st.wakeWord && r?.ok), error: st.wakeWord && !r?.ok ? (r?.error || (r?.result === "sem-reconhecedor" ? "Nenhum reconhecedor de voz instalado no Windows" : "Não consegui ligar")) : null, lang: r?.result?.split(":")[1] || null };
+  send("wake:state", wakeState);
+  return wakeState;
+}
+ipcMain.handle("wake:apply", () => applyWake());
+ipcMain.handle("wake:get", () => wakeState);
+
+/* ═════════ Mixer: saída de áudio e volume por app ═════════ */
+ipcMain.handle("mix:get", () => helperCall({ cmd: "mix" }, 5000));
+ipcMain.handle("mix:setdev", (_e, id) => helperCall({ cmd: "setdev", value: id }, 5000));
+ipcMain.handle("mix:appvol", (_e, { pids, volume }) => helperCall({ cmd: "appvol", pids, volume }, 5000));
+ipcMain.handle("mix:appmute", (_e, { pids, mute }) => helperCall({ cmd: "appmute", pids, mute: mute ? 1 : 0 }, 5000));
+
+/* ═════════ Relatar problema ═════════ */
+// Junta registros (sem chaves nem conteúdo pessoal), um print opcional e abre uma issue pronta no GitHub.
+const tail = (file, n) => { try { return fs.readFileSync(file, "utf8").split(/\r?\n/).slice(-n).join("\n"); } catch { return ""; } };
+ipcMain.handle("report:make", async (_e, { note = "", withShot = false } = {}) => {
+  try {
+    const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 16);
+    const dir = path.join(os.tmpdir(), `kon-relatorio-${stamp}`);
+    fs.mkdirSync(dir, { recursive: true });
+    const pub = publicSettings();
+    delete pub.icsUrl; // o link da agenda é secreto
+    const info = {
+      versao: app.getVersion(), electron: process.versions.electron, windows: os.release(), arquitetura: process.arch,
+      memoriaGB: +(os.totalmem() / 1024 ** 3).toFixed(1), helper: !!helper, telaCheia: fgState, atualizacao: updateStatus,
+      claudeHooks: (() => { try { return hooksState(readClaudeSettings()); } catch { return null; } })(),
+      telas: screen.getAllDisplays().map((d) => ({ w: d.bounds.width, h: d.bounds.height, escala: d.scaleFactor })),
+      ajustes: pub, nota: String(note).slice(0, 2000),
+    };
+    fs.writeFileSync(path.join(dir, "info.json"), JSON.stringify(info, null, 2));
+    for (const f of ["kon-error.log", "kon-update.log"]) { const t = tail(userFile(f), 400); if (t) fs.writeFileSync(path.join(dir, f), t); }
+    if (withShot) {
+      try {
+        const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+        const src = (await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: d.bounds.width, height: d.bounds.height } })).find((x) => String(x.display_id) === String(d.id));
+        if (src) fs.writeFileSync(path.join(dir, "tela.png"), src.thumbnail.toPNG());
+      } catch {}
+    }
+    const desk = app.getPath("desktop");
+    const zip = path.join(desk, `Kon-relatorio-${stamp}.zip`);
+    if (process.platform === "win32") {
+      await new Promise((res) => {
+        const q = (x) => "'" + x.replace(/'/g, "''") + "'";
+        spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `Compress-Archive -Path ${q(dir + "\\*")} -DestinationPath ${q(zip)} -Force`], { windowsHide: true }).on("exit", res);
+      });
+    }
+    const errs = tail(userFile("kon-error.log"), 12).split("\n").filter(Boolean).slice(-8).map((l) => l.slice(0, 220)).join("\n");
+    const body = [
+      `**O que aconteceu**`, note || "(descreva aqui)", ``,
+      `**Ambiente**`, `Kon ${info.versao} · Windows ${info.windows} · ${info.telas.length} tela(s)`, ``,
+      errs ? "**Últimos erros**\n```\n" + errs + "\n```" : "Sem erros registrados.", ``,
+      `_Arraste para cá o arquivo **${path.basename(zip)}** que o Kon salvou na sua Área de Trabalho._`,
+    ].join("\n");
+    const title = `Problema: ${(note || "relatório do Kon").split(/\r?\n/)[0].slice(0, 80)}`;
+    const url = `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/issues/new?${new URLSearchParams({ title, body: body.slice(0, 6000) })}`;
+    return { ok: true, zip: fs.existsSync(zip) ? zip : null, url };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.on("report:reveal", (_e, p) => shell.showItemInFolder(p));
+
+/* ═════════ Botões rápidos ═════════ */
+ipcMain.handle("quick:pick", async (_e, kind) => {
+  const { dialog } = require("electron");
+  focusKon();
+  const r = await dialog.showOpenDialog(win, { properties: [kind === "folder" ? "openDirectory" : "openFile"], title: kind === "folder" ? "Escolha a pasta" : "Escolha o programa ou arquivo" });
+  return r.canceled ? null : r.filePaths[0];
+});
+ipcMain.handle("quick:run", async (_e, it) => {
+  try {
+    if (it.kind === "site") {
+      const url = /^https?:\/\//i.test(it.target) ? it.target : `https://${it.target}`;
+      await shell.openExternal(url); return { ok: true };
+    }
+    if (it.kind === "cmd") {
+      // comando escrito por você: roda numa janela própria para você ver a saída
+      spawn(`start "Kon" cmd /k ${it.target}`, { shell: true, detached: true, windowsHide: true, cwd: os.homedir() }).unref();
+      return { ok: true };
+    }
+    const err = await shell.openPath(it.target);
+    return err ? { ok: false, error: err } : { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+/* ═════════ Foco: Não incomodar do Windows ═════════ */
+let dndPrev = null;
+ipcMain.handle("focus:dnd", async (_e, on) => {
+  if (on) {
+    const r = await helperCall({ cmd: "dnd", mode: 2 }, 3000);
+    if (r?.ok && dndPrev === null) dndPrev = r.prev >= 0 ? r.prev : 0;
+    return { ok: !!r?.ok };
+  }
+  const r = await helperCall({ cmd: "dnd", mode: dndPrev ?? 0 }, 3000);
+  dndPrev = null;
+  return { ok: !!r?.ok };
+});
+
+/* ═════════ Sistema: CPU, memória, disco e quem está pesando ═════════ */
+let cpuPrev = os.cpus();
+let cpuNow = 0;
+let cpuHighSince = 0;
+let lastHeavyAlert = 0;
+function sampleCpu() {
+  const cur = os.cpus();
+  let idle = 0, total = 0;
+  cur.forEach((c, i) => {
+    const p = cpuPrev[i] || c;
+    const t = (k) => c.times[k] - p.times[k];
+    const tot = t("user") + t("nice") + t("sys") + t("idle") + t("irq");
+    idle += t("idle"); total += tot;
+  });
+  cpuPrev = cur;
+  cpuNow = total > 0 ? Math.round(100 * (1 - idle / total)) : 0;
+  return cpuNow;
+}
+function diskInfo() {
+  try {
+    const root = process.platform === "win32" ? (process.env.SystemDrive || "C:") + "\\" : "/";
+    const st = fs.statfsSync(root);
+    return { total: st.blocks * st.bsize, free: st.bavail * st.bsize, root };
+  } catch { return null; }
+}
+ipcMain.handle("sys:get", async (_e, withProcs) => {
+  const total = os.totalmem(), free = os.freemem();
+  const procs = withProcs ? await helperCall({ cmd: "procs" }, 4000) : null;
+  return { ok: true, cpu: cpuNow, cores: os.cpus().length, cpuModel: (os.cpus()[0]?.model || "").replace(/\s+/g, " ").trim(), mem: { total, used: total - free }, disk: diskInfo(), uptime: os.uptime(), top: procs?.top || [], topMem: procs?.topMem?.[0] || null };
+});
+async function heavyCheck() {
+  sampleCpu();
+  const memPct = 100 * (1 - os.freemem() / os.totalmem());
+  const high = cpuNow >= 90 || memPct >= 93;
+  if (!high) { cpuHighSince = 0; return; }
+  if (!cpuHighSince) cpuHighSince = Date.now();
+  if (Date.now() - cpuHighSince < 30e3 || Date.now() - lastHeavyAlert < 10 * 60e3 || readSettings().sysAlerts === false) return;
+  lastHeavyAlert = Date.now();
+  const r = await helperCall({ cmd: "procs" }, 4000);
+  const top = r?.top?.[0];
+  const text = cpuNow >= 90
+    ? `PC sobrecarregado: CPU em ${cpuNow}%${top ? ` · ${top.name} usa ${Math.round(top.cpu)}%` : ""}`
+    : `Memória quase cheia (${Math.round(memPct)}%)${r?.topMem?.[0] ? ` · ${r.topMem[0].name} usa ${(r.topMem[0].mem / 1024).toFixed(1)} GB` : ""}`;
+  send("toast", { kind: "error", text });
+}
+
+/* ═════════ Pergunte sobre a tela ═════════ */
+ipcMain.handle("screen:capture", async () => {
+  try {
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const { bounds, scaleFactor } = display;
+    const protectedWin = readSettings().hideInCapture !== false;
+    if (!protectedWin) { win?.setOpacity(0); await new Promise((r) => setTimeout(r, 90)); }
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: Math.round(bounds.width * scaleFactor), height: Math.round(bounds.height * scaleFactor) } });
+    if (!protectedWin) win?.setOpacity(1);
+    const src = sources.find((x) => String(x.display_id) === String(display.id)) || sources[0];
+    if (!src) return { ok: false, error: "Não consegui capturar a tela" };
+    let img = src.thumbnail;
+    const sz = img.getSize();
+    const k = Math.min(1, 1600 / Math.max(sz.width, sz.height)); // menos tokens, ainda legível
+    if (k < 1) img = img.resize({ width: Math.round(sz.width * k), height: Math.round(sz.height * k), quality: "good" });
+    const file = path.join(os.tmpdir(), `kon-tela-${Date.now()}.png`);
+    fs.writeFileSync(file, img.toPNG());
+    setTimeout(() => fs.unlink(file, () => {}), 10 * 60e3);
+    return { ok: true, path: file, name: "Captura da tela" };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+/* ═════════ Lembretes ("me lembra em 20 min de…") ═════════ */
+// Ficam no processo principal: disparam mesmo se a interface recarregar. Salvos em kon-reminders.json.
+const remPath = () => userFile("kon-reminders.json");
+let reminders = null;
+function remList() { if (!reminders) { try { reminders = JSON.parse(fs.readFileSync(remPath(), "utf8")); } catch { reminders = []; } } return reminders; }
+function remSave() { try { fs.writeFileSync(remPath(), JSON.stringify(reminders)); } catch {} send("reminders:changed", reminders); }
+let dueReminders = 0;
+function remTick() {
+  const now = Date.now();
+  let changed = false;
+  for (const r of remList()) {
+    if (r.fired || r.at > now) continue;
+    r.fired = true; changed = true;
+    dueReminders++;
+    applyFullscreen();
+    send("reminder:due", r);
+    // se o Kon estiver escondido (tela cheia), avisa também pelo Windows
+    if (hiddenForFullscreen || !win || win.isDestroyed()) { try { new Notification({ title: "Kon · lembrete", body: r.text }).show(); } catch {} }
+  }
+  // limpa lembretes disparados há mais de 1 dia
+  const before = reminders.length;
+  reminders = reminders.filter((r) => !r.fired || now - r.at < 864e5);
+  if (changed || reminders.length !== before) remSave();
+}
+ipcMain.handle("rem:list", () => remList());
+ipcMain.handle("rem:add", (_e, { text, at }) => { remList().push({ id: crypto.randomUUID(), text: String(text || "Lembrete").slice(0, 200), at: +at, fired: false }); remSave(); return reminders; });
+ipcMain.handle("rem:remove", (_e, id) => { reminders = remList().filter((r) => r.id !== id); remSave(); return reminders; });
+ipcMain.handle("rem:snooze", (_e, { id, minutes }) => {
+  const r = remList().find((x) => x.id === id);
+  if (r) { r.at = Date.now() + (minutes || 10) * 60e3; r.fired = false; }
+  remSave(); return reminders;
+});
+ipcMain.on("rem:ack", () => { dueReminders = Math.max(0, dueReminders - 1); applyFullscreen(); });
 
 /* ═════════ Compactar (zona de soltar) ═════════ */
 ipcMain.handle("zip:make", (_e, paths = []) => new Promise((resolve) => {
@@ -735,16 +987,99 @@ function startUpdater() {
   });
   autoUpdater.on("update-downloaded", (info) => { updateInfo = { version: info.version }; setUpdStatus({ state: "ready", version: info.version }); send("update:ready", updateInfo); });
   autoUpdater.on("error", (e) => { const message = String(e?.message || e).split("\n")[0]; updLog("error", message); setUpdStatus({ state: "error", message }); });
-  const check = () => { if (readSettings().autoUpdate !== false) autoUpdater.checkForUpdates().catch(() => {}); };
+  const check = () => { if (readSettings().autoUpdate !== false) checkAll().catch((e) => updLog("error", e.message)); };
   setTimeout(check, 20e3);
   setInterval(check, 4 * 3600e3);
 }
+/* Atualização pequena: quando só o app mudou (mesmo Electron), baixa o app.asar compactado (~7 MB)
+   em vez do instalador inteiro (~115 MB). Quando o Electron muda, usa o instalador completo. */
+const FEED = `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/latest/download`;
+const verNum = (v) => String(v || "0").split(".").map((x) => parseInt(x, 10) || 0);
+const isNewer = (a, b) => { const x = verNum(a), y = verNum(b); for (let i = 0; i < 3; i++) { if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0); } return false; };
+async function checkPatch() {
+  const r = await fetch(`${FEED}/kon-patch.json?t=${Date.now()}`, { signal: AbortSignal.timeout(15000) });
+  if (!r.ok) return null;
+  const j = await r.json();
+  if (!isNewer(j.version, app.getVersion())) return { latest: true };
+  if (j.electron !== process.versions.electron) return { full: true, version: j.version };
+  return j;
+}
+async function downloadPatch(j) {
+  setUpdStatus({ state: "downloading", version: j.version, percent: 0, small: true });
+  const res = await fetch(`${FEED}/${j.file}`, { signal: AbortSignal.timeout(10 * 60e3) });
+  if (!res.ok) throw new Error(`download ${res.status}`);
+  const total = +res.headers.get("content-length") || j.size || 0;
+  const reader = res.body.getReader();
+  const chunks = []; let got = 0, lastPct = -1;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); got += value.length;
+    const pct = total ? Math.floor((got / total) * 100) : 0;
+    if (pct !== lastPct) { lastPct = pct; setUpdStatus({ state: "downloading", version: j.version, percent: pct, small: true }); }
+  }
+  const asar = require("zlib").gunzipSync(Buffer.concat(chunks.map((c) => Buffer.from(c))));
+  const sha = crypto.createHash("sha512").update(asar).digest("base64");
+  if (sha !== j.sha512) throw new Error("o arquivo baixado não confere (sha512)");
+  const dir = userFile("patch");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "app.asar"), asar);
+  updateInfo = { version: j.version, patch: true };
+  updLog("info", `patch ${j.version} pronto (${(got / 1e6).toFixed(1)} MB)`);
+  setUpdStatus({ state: "ready", version: j.version, small: true });
+  send("update:ready", updateInfo);
+}
+let checking = false;
+async function checkAll() {
+  if (checking || updateInfo) return { ok: true, latest: updateInfo?.version, newer: !!updateInfo };
+  checking = true;
+  try {
+    setUpdStatus({ state: "checking" });
+    let p = null;
+    try { p = await checkPatch(); } catch (e) { updLog("warn", "patch: " + e.message); }
+    if (p?.latest) { setUpdStatus({ state: "latest" }); return { ok: true, newer: false }; }
+    if (p && !p.full) { downloadPatch(p).catch((e) => { updLog("error", "patch: " + e.message); setUpdStatus({ state: "error", message: e.message }); fullCheck(); }); return { ok: true, newer: true, latest: p.version }; }
+    return await fullCheck();
+  } finally { checking = false; }
+}
+async function fullCheck() {
+  const r = await autoUpdater.checkForUpdates();
+  const v = r?.updateInfo?.version;
+  return { ok: true, latest: v, newer: !!v && isNewer(v, app.getVersion()) };
+}
+let patchInstalling = false;
+function installPatch(relaunch = true) {
+  if (patchInstalling) return;
+  patchInstalling = true;
+  const exe = process.execPath;
+  const dst = path.join(process.resourcesPath, "app.asar");
+  const src = path.join(userFile("patch"), "app.asar");
+  const ps = path.join(os.tmpdir(), `kon-patch-${Date.now()}.ps1`);
+  const q = (x) => "'" + String(x).replace(/'/g, "''") + "'";
+  fs.writeFileSync(ps, [
+    `$ErrorActionPreference = 'SilentlyContinue'`,
+    `Wait-Process -Id ${process.pid} -Timeout 20`,
+    `Start-Sleep -Milliseconds 600`,
+    `Get-Process -Name 'Kon' | Where-Object { $_.Path -eq ${q(exe)} } | Stop-Process -Force`,
+    `Start-Sleep -Milliseconds 400`,
+    `$ok = $false`,
+    `for ($i = 0; $i -lt 30 -and -not $ok; $i++) { try { Copy-Item -LiteralPath ${q(dst)} -Destination (${q(dst)} + '.bak') -Force -ErrorAction Stop; Copy-Item -LiteralPath ${q(src)} -Destination ${q(dst)} -Force -ErrorAction Stop; $ok = $true } catch { Start-Sleep -Milliseconds 500 } }`,
+    `if ($ok) { Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\app.kon.desktop' -Name DisplayVersion -Value ${q(updateInfo.version)}; Remove-Item -LiteralPath ${q(src)} -Force }`,
+    `Add-Content -LiteralPath ${q(userFile("kon-update.log"))} -Value ((Get-Date -Format o) + ' patch aplicado: ' + $ok)`,
+    relaunch ? `Start-Process -FilePath ${q(exe)}` : "",
+    `Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force`,
+  ].join("\r\n"), "utf8");
+  spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", ps], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  if (relaunch) app.quit();
+}
+
 ipcMain.handle("update:get", () => ({ version: app.getVersion(), ready: updateInfo, status: updateStatus, portable: !!process.env.PORTABLE_EXECUTABLE_FILE }));
 ipcMain.on("update:install", () => {
   if (!updateInfo || !autoUpdater) return;
-  updLog("info", `instalando ${updateInfo.version}`);
+  updLog("info", `instalando ${updateInfo.version}${updateInfo.patch ? " (pequena)" : ""}`);
   app.isQuitting = true;
   try { helper?.stdin.end(); helper?.kill(); } catch {}
+  if (updateInfo.patch) return installPatch();
   setImmediate(() => autoUpdater.quitAndInstall(true, true));
 });
 ipcMain.handle("update:check", async () => {
@@ -753,7 +1088,7 @@ ipcMain.handle("update:check", async () => {
   if (!updaterReady) return { ok: false, error: "Atualizador indisponível" };
   if (updateInfo) return { ok: true, latest: updateInfo.version, newer: true, ready: true };
   if (updateStatus.state === "downloading") return { ok: true, latest: updateStatus.version, newer: true, downloading: true };
-  try { const r = await autoUpdater.checkForUpdates(); const v = r?.updateInfo?.version; return { ok: true, latest: v, newer: !!v && v !== app.getVersion() }; }
+  try { return await checkAll(); }
   catch (e) { return { ok: false, error: String(e?.message || e).split("\n")[0] }; }
 });
 
@@ -781,6 +1116,7 @@ function registerShortcuts() {
     globalShortcut.register("Control+Alt+T", () => startOcr()),
     globalShortcut.register("Control+Alt+E", () => send("shortcut", "panel")),
     globalShortcut.register("Control+Alt+V", () => { win?.show(); send("shortcut", "clip"); }),
+    globalShortcut.register("Control+Alt+R", () => { grabSelection().catch(() => {}); }),
   ];
   if (ok.includes(false)) console.warn("Algum atalho global já está em uso por outro programa");
 }
@@ -793,7 +1129,9 @@ function createTray() {
     { label: "Smart OCR             Ctrl+Alt+T", click: () => startOcr() },
     { label: "Abrir painel          Ctrl+Alt+E", click: () => send("shortcut", "panel") },
     { label: "Área de transferência  Ctrl+Alt+V", click: () => send("shortcut", "clip") },
+    { label: "Ações no texto selecionado  Ctrl+Alt+R", click: () => grabSelection().catch(() => {}) },
     { label: "Configurações", click: () => { focusKon(); send("shortcut", "settings"); } },
+    { label: "Relatar problema", click: () => { focusKon(); send("shortcut", "report"); } },
     { type: "separator" },
     { label: "Iniciar com o Windows", type: "checkbox", checked: !!s.autoStart, click: (i) => writeSettings({ autoStart: i.checked }) },
     { label: "Recarregar", click: () => win?.reload() },
@@ -825,6 +1163,8 @@ if (process.argv.includes("--remove-hooks")) {
     startUpdater();
     clipLast = readClipText();
     setInterval(clipTick, 800);
+    setInterval(() => { try { remTick(); } catch (e) { console.warn("lembretes", e); } }, 5000);
+    setInterval(() => { heavyCheck().catch(() => {}); }, 5000);
     // mantém a opção "Iniciar com o Windows" em sincronia com o que o instalador marcou
     try { const on = app.getLoginItemSettings().openAtLogin; if (on !== !!readSettings().autoStart) writeSettings({ autoStart: on }); } catch {}
     const replace = () => placeWindow();
@@ -832,7 +1172,10 @@ if (process.argv.includes("--remove-hooks")) {
     screen.on("display-added", replace);
     screen.on("display-removed", replace);
   });
-  app.on("before-quit", () => { app.isQuitting = true; try { helper?.stdin.end(); helper?.kill(); } catch {} });
+  app.on("before-quit", () => {
+    // atualização pequena baixada e você fechou o Kon: aplica ao sair, sem reabrir
+    if (updateInfo?.patch && !patchInstalling) { try { installPatch(false); } catch {} }
+    app.isQuitting = true; try { helper?.stdin.end(); helper?.kill(); } catch {} });
   app.on("will-quit", () => globalShortcut.unregisterAll());
   app.on("window-all-closed", () => app.quit());
 }

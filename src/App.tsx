@@ -7,11 +7,11 @@ import {
   ChevronLeft, ChevronRight, ArrowLeftRight, Trash2, Pencil, KeyRound, ExternalLink, Power, Eye as EyeIcon, Music2,
   FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, FileArchive, FileCode, Folder,
   Mic, Square, Globe, MapPin, Download, Bell, CheckCircle2, AlertTriangle,
-  Camera, Pin, PinOff, ClipboardList, Archive, Sparkles, Video, CalendarClock, RefreshCw, Paperclip, Terminal, ShieldCheck, Monitor, MousePointerClick,
+  Camera, Pin, PinOff, Zap, Cpu, HardDrive, MemoryStick, AppWindow, Link2, TerminalSquare, ClipboardList, Archive, Sparkles, Video, CalendarClock, RefreshCw, Paperclip, Terminal, ShieldCheck, Monitor, MousePointerClick,
   Sun, Cloud, CloudSun, CloudMoon, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets, Wind, Sunrise, Sunset, Thermometer,
 } from "lucide-react";
 import {
-  SPRING, FADE, COMPACT, PANEL_SIZE, PANEL_DEFAULT, PAGE_META, DEFAULT_ORDER, DURATION, STAGES, LYRICS,
+  ACCENTS, SPRING, FADE, COMPACT, PANEL_SIZE, PANEL_DEFAULT, PAGE_META, DEFAULT_ORDER, DURATION, STAGES, LYRICS,
   fmt, pad, DAYS_T, MONTHS_T, MONTHS_FULL, WEEK, fmtDate, fmtClock, fmtNum, MATH_RE, parseNum, calc, CUR_RE, fmtCur,
   BR_CITIES, wmo, toMin, cityNow, LANGS, TARGETS, INITIAL_TODOS, usePersist, glassBtn,
   detectLangLocal, translateLocal,
@@ -19,6 +19,8 @@ import {
 import { Eyes, AlbumArt, Equalizer, Waveform, Seg, Ring, Ruler, Switch, PillBtn, PageRow } from "./ui.jsx";
 import { KonTofu, KonTofuEating } from "./components/KonMascot";
 import { bridge } from "./bridge.js";
+import { convertUnits } from "./units.js";
+import { parseReminder, describeWhen } from "./reminders.js";
 import { getRates, RATES_TTL, getIpLocation, getWeather, getLyrics, getCoverArt } from "./services.js";
 
 const TASK_DAYS = [0, 1, -2, 3, 6];
@@ -87,7 +89,24 @@ function permText(p) {
   else if (t === "ExitPlanMode") { title = "Claude quer sair do modo plano"; sub = "e começar a executar o plano"; }
   else if (t.startsWith("mcp__")) { const parts = t.split("__"); title = `Claude quer usar ${parts[2] || t}`; sub = `conector ${parts[1] || ""}`; }
   else sub = JSON.stringify(i).slice(0, 120);
-  return { title, sub, project };
+  // prévia do que muda: até 2 linhas que saem e 2 que entram
+  const L = (x) => String(x || "").split(/\r?\n/).map((l) => l.replace(/\t/g, "  ")).filter((l) => l.trim());
+  let diff = null, more = 0;
+  const e0 = t === "MultiEdit" ? (i.edits || [])[0] || {} : i;
+  if (t === "Edit" || t === "MultiEdit") {
+    const rm = L(e0.old_string), add = L(e0.new_string);
+    diff = [...rm.slice(0, 2).map((x) => ["-", x]), ...add.slice(0, 2).map((x) => ["+", x])];
+    more = Math.max(0, rm.length - 2) + Math.max(0, add.length - 2) + (t === "MultiEdit" ? Math.max(0, (i.edits || []).length - 1) : 0);
+  } else if (t === "Write") {
+    const add = L(i.content);
+    diff = add.slice(0, 3).map((x) => ["+", x]);
+    more = Math.max(0, add.length - 3);
+  } else if (t === "NotebookEdit") {
+    const add = L(i.new_source);
+    diff = add.slice(0, 3).map((x) => ["+", x]);
+    more = Math.max(0, add.length - 3);
+  }
+  return { title, sub, project, diff: diff && diff.length ? diff : null, more };
 }
 const fmtLeft = (ms) => {
   if (!ms || ms <= 0) return "agora";
@@ -96,6 +115,14 @@ const fmtLeft = (ms) => {
 };
 const fmtTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1).replace(".", ",")} M` : n >= 1e3 ? `${Math.round(n / 1e3)} mil` : `${n || 0}`);
 const fmtUsd = (n) => `US$ ${(n || 0).toFixed(2).replace(".", ",")}`;
+const TEXT_ACTIONS = [
+  ["resumir", "Resumir", "Resuma o texto abaixo em português, em até 3 frases curtas."],
+  ["traduzir", "Traduzir", "Se o texto abaixo estiver em português, traduza para o inglês; se estiver em outro idioma, traduza para o português do Brasil. Mantenha o tom e a formatação."],
+  ["corrigir", "Corrigir", "Corrija ortografia, gramática e pontuação do texto abaixo, mantendo o idioma, o tom e a formatação."],
+  ["formal", "Mais formal", "Reescreva o texto abaixo em tom mais formal e profissional, no mesmo idioma."],
+  ["curto", "Mais curto", "Reescreva o texto abaixo mais curto e direto, no mesmo idioma, sem perder o sentido."],
+  ["explicar", "Explicar", "Explique em português, de forma simples, o que o texto abaixo quer dizer."],
+];
 const PLAN_LABEL = { auto: "Automático", pro: "Pro", max5: "Max 5×", max20: "Max 20×" };
 
 export default function KonIsland() {
@@ -124,6 +151,21 @@ export default function KonIsland() {
   const [dismissed, setDismissed] = useState({});  // cards de ação dispensados
   const [askFile, setAskFile] = useState(null);    // arquivo anexado de propósito (zona "Perguntar à IA")
   const [dropZone, setDropZone] = useState("stash");
+  const [reminders, setReminders] = useState([]);
+  const [mixOpen, setMixOpen] = useState(false);
+  const [quick, setQuick] = usePersist("quick.v1", []);
+  const [qForm, setQFormState] = useState(null);  // { kind, label, target } enquanto adiciona
+  const setQForm = (v) => setQFormState((cur) => { const n = typeof v === "function" ? v(cur) : v; return n; });
+  const [qEdit, setQEdit] = useState(false);
+  const [qIcons, setQIcons] = useState({});
+  const [sys, setSys] = useState(null);
+  const [rep, setRep] = useState({ note: "", shot: true, status: "idle", result: null });
+  const [wake, setWake] = useState({ on: false });
+  const [focusLog, setFocusLog] = usePersist("focusLog.v1", []);
+  const [mix, setMix] = useState(null);
+  const mixSend = useRef({});
+  const [ta, setTa] = useState({ text: "", status: "idle", action: "", result: "", error: "" }); // ações no texto selecionado
+  const [dueRems, setDueRems] = useState([]);       // lembretes que tocaram e esperam você
   const [keyDraft, setKeyDraft] = useState({ gemini: "", anthropic: "" });
   const [showKey, setShowKey] = useState(false);
 
@@ -275,8 +317,11 @@ export default function KonIsland() {
   const tabRef = useRef(tab); tabRef.current = tab;
   const leaveTimer = useRef(null);
   const addingRef = useRef(false); addingRef.current = adding;
+  const qFormRef = useRef(null); qFormRef.current = qForm;
+  const qInputRef = useRef(null);
   const islandBoxRef = useRef(null);
 
+  const timerTotalRef = useRef(timerTotal); timerTotalRef.current = timerTotal;
   const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.current.push(id); return id; };
   const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
   const copy = async (text, key) => {
@@ -323,7 +368,11 @@ export default function KonIsland() {
   useEffect(() => {
     if (!timerRunning) return;
     const t = setInterval(() => setRemaining((r) => {
-      if (r <= 1) { setTimerRunning(false); toast("Foco concluído — hora de uma pausa", "success", "bell"); flashSuccess(); return 0; }
+      if (r <= 1) {
+        setTimerRunning(false); toast("Foco concluído — hora de uma pausa", "success", "bell"); flashSuccess();
+        setFocusLog((l) => [...l.slice(-300), { at: Date.now(), minutes: Math.max(1, Math.round(timerTotalRef.current / 60)) }]);
+        return 0;
+      }
       return r - 1;
     }), 1000);
     return () => clearInterval(t);
@@ -448,6 +497,86 @@ export default function KonIsland() {
     setCalStatus(r?.empty ? "" : r?.error ? `Erro: ${r.error}` : r?.at ? `Atualizada às ${fmtHM(r.at)}` : "");
   };
   useEffect(() => { refreshCal(); const t = setInterval(() => refreshCal(), 10 * 60e3); return () => clearInterval(t); }, [settings.icsUrl]); // eslint-disable-line
+  useEffect(() => { bridge.wakeGet().then(setWake); return bridge.on("wake:state", setWake); }, []);
+  /* Lembretes */
+  useEffect(() => {
+    bridge.remList().then(setReminders);
+    const onDue = (r) => { setDueRems((l) => (l.some((x) => x.id === r.id) ? l : [...l, r])); bridge.remList().then(setReminders); };
+    const offA = bridge.on("reminder:due", onDue);
+    const offB = bridge.on("reminders:changed", setReminders);
+    const web = (e) => onDue(e.detail);
+    window.addEventListener("kon-web-reminder", web);
+    return () => { offA(); offB(); window.removeEventListener("kon-web-reminder", web); };
+  }, []);
+  /* Focus de verdade: liga o Não incomodar do Windows enquanto o timer roda */
+  const dndOnRef = useRef(false);
+  useEffect(() => {
+    const want = timerRunning && settings.focusDnd !== false && REAL;
+    if (want === dndOnRef.current) return;
+    dndOnRef.current = want;
+    bridge.focusDnd(want);
+  }, [timerRunning, settings.focusDnd]); // eslint-disable-line
+  /* Sistema: atualiza a cada 2 s com a página aberta (processos a cada 4 s) */
+  useEffect(() => {
+    if (view !== "panel" || tab !== "system") return;
+    let alive = true, n = 0;
+    const load = () => bridge.sysInfo(n++ % 2 === 0).then((r) => alive && r && setSys((cur) => ({ ...r, top: r.top?.length ? r.top : cur?.top || [], topMem: r.topMem || cur?.topMem || null })));
+    load();
+    const t = setInterval(load, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, [view, tab]);
+  /* Atalhos: ícones de apps e arquivos */
+  useEffect(() => {
+    quick.forEach((q) => {
+      if (qIcons[q.id] !== undefined || q.kind === "cmd") return;
+      setQIcons((m) => ({ ...m, [q.id]: null }));
+      if (q.kind === "site") { const host = q.target.replace(/^https?:\/\//, "").split("/")[0]; setQIcons((m) => ({ ...m, [q.id]: `https://www.google.com/s2/favicons?domain=${host}&sz=64` })); return; }
+      bridge.stashIcon(q.target).then((url) => url && setQIcons((m) => ({ ...m, [q.id]: url })));
+    });
+  }, [quick]); // eslint-disable-line
+  const addQuick = () => {
+    if (!qForm?.target?.trim()) return;
+    const t = qForm.target.trim();
+    const label = qForm.label?.trim() || (qForm.kind === "site" ? t.replace(/^https?:\/\//, "").split("/")[0] : qForm.kind === "cmd" ? t.split(" ")[0] : t.split(/[\\/]/).filter(Boolean).pop().replace(/\.(exe|lnk|url)$/i, ""));
+    setQuick((l) => [...l, { id: uid(), kind: qForm.kind, label, target: t }]);
+    setQForm(null);
+  };
+  /* Mixer (página Música): atualiza a cada 3 s enquanto aberto */
+  useEffect(() => {
+    if (!mixOpen || view !== "panel" || tab !== "music") return;
+    let alive = true;
+    const load = () => bridge.mixGet().then((m) => alive && m && setMix(m));
+    load();
+    const t = setInterval(load, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, [mixOpen, view, tab]);
+  const setAppVol = (app, v) => {
+    setMix((m) => ({ ...m, apps: m.apps.map((a) => (a.name === app.name ? { ...a, volume: v } : a)) }));
+    const now = Date.now(), last = mixSend.current[app.name] || 0;
+    clearTimeout(mixSend.current[app.name + ":t"]);
+    const fire = () => { mixSend.current[app.name] = Date.now(); bridge.mixAppVolume(app.pids, v); };
+    if (now - last > 120) fire(); else mixSend.current[app.name + ":t"] = setTimeout(fire, 120);
+  };
+  /* Ações no texto selecionado (Ctrl+Alt+R) */
+  useEffect(() => bridge.on("textact:open", ({ text, error }) => {
+    clearTimers();
+    setTa({ text: text || "", error: error || "", status: "idle", action: "", result: "" });
+    setView("textact");
+  }), []);
+  const runTextAction = async (id) => {
+    const a = TEXT_ACTIONS.find((x) => x[0] === id);
+    const provider = providerHasKey(settings.provider) ? settings.provider : settings.hasGeminiKey ? "gemini" : settings.hasAnthropicKey ? "claude" : null;
+    if (!provider) { setTa((t) => ({ ...t, action: id, status: "error", result: "Adicione uma chave do Gemini ou do Claude em Ajustes." })); return; }
+    setTa((t) => ({ ...t, action: id, status: "working", result: "" }));
+    const r = await bridge.aiOnce({ provider, system: "Você edita textos para o usuário. Responda somente com o texto final, sem aspas, sem comentários e sem explicar o que fez (exceto quando pedirem uma explicação).", messages: [{ role: "user", text: `${a[2]}\n\n"""\n${ta.text}\n"""` }] });
+    if (r.ok) { setTa((t) => ({ ...t, status: "done", result: String(r.text || "").trim().replace(/^"""|"""$/g, "").trim() })); flashSuccess(); }
+    else setTa((t) => ({ ...t, status: "error", result: r.code === "NO_KEY" ? "Adicione sua chave em Ajustes." : r.message || "Não deu certo." }));
+  };
+  const closeReminder = async (r, snooze) => {
+    setDueRems((l) => l.filter((x) => x.id !== r.id));
+    bridge.remAck();
+    if (snooze) { setReminders(await bridge.remSnooze(r.id, snooze)); toast(`Adiado ${snooze} min`, "info", "bell"); }
+  };
   /* Área de transferência, tela cheia, privacidade, atualizações */
   useEffect(() => { bridge.clipList().then(setClips); return bridge.on("clip:changed", setClips); }, []);
   useEffect(() => { bridge.fgState().then(setFg); return bridge.on("fg:state", setFg); }, []);
@@ -637,6 +766,14 @@ export default function KonIsland() {
   const submitAsk = (q, contextText) => {
     clearTimers();
     if (aiReq.current) bridge.aiAbort(aiReq.current);
+    const rem = !contextText && !askFileRef.current ? parseReminder(q) : null;
+    if (rem) {
+      bridge.remAdd(rem).then(setReminders);
+      setAskQ(q); setQuery(""); setAskError(null); setSources([]); setAnswerMeta(null); setMessages([]);
+      setAnswer(`Combinado: ${describeWhen(rem.at)} eu te aviso no notch.\n${rem.text}`);
+      setAskPhase("done"); setView("ask"); flashSuccess();
+      return;
+    }
     const provider = settingsRef.current.provider;
     const userText = contextText ? `Texto capturado da minha tela:\n"""\n${contextText}\n"""\n\n${q}` : q;
     const history = [...(contextText ? [] : messages), { role: "user", text: userText }];
@@ -707,6 +844,7 @@ export default function KonIsland() {
       setTimeout(() => { if (rec.state === "recording") rec.stop(); }, 12000);
     } catch { setListening(false); toast("Microfone indisponível", "error"); }
   };
+  const toggleVoiceRef = useRef(null);
   const toggleVoice = () => {
     if (listening) return stopVoice();
     const SR = window.webkitSpeechRecognition || window.SpeechRecognition;
@@ -723,6 +861,7 @@ export default function KonIsland() {
     try { rec.start(); recRef.current = rec; setListening(true); } catch { voiceFallback.current = true; recordFallback(); }
   };
 
+  toggleVoiceRef.current = toggleVoice;
   /* ─── Tradutor híbrido: IA quando há chave; dicionário local quando não há ─── */
   const tReq = useRef(0);
   const doTranslate = async () => {
@@ -786,11 +925,13 @@ export default function KonIsland() {
     if (name === "ask") viewRef.current === "ask" ? toCompact() : openAsk();
     if (name === "panel") viewRef.current === "panel" ? toCompact() : openPanel();
     if (name === "settings") openSheet("settings");
+    if (name === "wake") { openAsk(); setTimeout(() => toggleVoiceRef.current?.(), 250); }
+    if (name === "report") { setRep({ note: "", shot: true, status: "idle", result: null }); openSheet("report"); }
     if (name === "clip") viewRef.current === "panel" && tabRef.current === "clip" ? toCompact() : openPanel("clip");
   }));
   useEffect(() => bridge.on("win:blurred", () => {
     if (["ask", "translate", "ocr", "sheet"].includes(viewRef.current)) toCompact();
-    else if (viewRef.current === "panel" && !adding) setView("compact");
+    else if (viewRef.current === "panel" && !adding && !qFormRef.current) setView("compact");
   }));
   useEffect(() => {
     const onKey = (e) => {
@@ -833,13 +974,15 @@ export default function KonIsland() {
     clearTimeout(hoverTimer.current);
     setHover(false);
     clearTimeout(leaveTimer.current);
-    leaveTimer.current = setTimeout(() => { if (viewRef.current === "panel" && !addingRef.current) setView("compact"); }, 280);
+    leaveTimer.current = setTimeout(() => { if (viewRef.current === "panel" && !addingRef.current && !qFormRef.current) setView("compact"); }, 280);
   };
 
   /* ─── Detecção inline (math 0 ms / câmbio com cache) ─── */
   let inline = null;
-  const cm = query.match(CUR_RE);
-  if (cm) {
+  const um = convertUnits(query);
+  const cm = !um && query.match(CUR_RE);
+  if (um) inline = { kind: "unit", text: um.text, error: um.error };
+  else if (cm) {
     const from = cm[2].toUpperCase(), to = cm[3].toUpperCase();
     const R = rates?.value?.rates;
     if (R?.[from] && R?.[to]) inline = { kind: "currency", text: fmtCur((parseNum(cm[1]) / R[from]) * R[to], to) };
@@ -871,6 +1014,7 @@ export default function KonIsland() {
   const perm = perms[0];
   const action = view !== "compact" || dragging ? null
     : perm ? { kind: "perm", key: perm.id, mood: "attention", ...permText(perm) }
+      : dueRems[0] ? { kind: "reminder", key: `rem-${dueRems[0].id}`, mood: "attention", title: dueRems[0].text, sub: `Lembrete das ${fmtHM(dueRems[0].at)}${dueRems.length > 1 ? ` · +${dueRems.length - 1}` : ""}` }
       : update && !dismissed[`upd-${update.version}`] ? { kind: "update", key: `upd-${update.version}`, mood: "done", title: `Kon ${update.version} pronto para instalar`, sub: "Baixado em segundo plano · reinicia em segundos" }
         : meetingSoon && meetingSoon.start - nowMs <= 2 * 60e3 && !dismissed[`mt-${meetingSoon.id}`] ? { kind: "meeting", key: `mt-${meetingSoon.id}`, mood: "attention", title: meetingSoon.title, sub: meetingSoon.start > nowMs ? `Começa às ${fmtHM(meetingSoon.start)}${meetingSoon.link ? " · link pronto" : ""}` : `Começou às ${fmtHM(meetingSoon.start)}` }
           : null;
@@ -884,8 +1028,9 @@ export default function KonIsland() {
   else if (view === "sheet") size = [440, 470];
   else if (view === "ask") { docked = false; size = [540, askOpen ? Math.min(360, Math.max(160, 46 + 44 + 24 + answerLines.length * 18 + (sources.length ? 30 : 0))) : 46]; }
   else if (view === "translate") { docked = false; size = [560, 250]; }
+  else if (view === "textact") { docked = false; size = [540, ta.error ? 52 : ta.status === "idle" ? 98 : ta.status === "working" ? 120 : Math.min(250, 128 + Math.min(6, Math.ceil(ta.result.length / 70) + (ta.result.match(/\n/g) || []).length) * 18)]; }
   else if (view === "ocr") { docked = false; size = ocrPhase === "reading" ? [280, 44] : [540, 46 + 42 + Math.min(180, ocrLineCount * 21 + 20)]; }
-  else if (action) size = [470, action.kind === "perm" ? 100 : 84];
+  else if (action) size = [action.diff ? 520 : 470, action.kind === "perm" ? (action.diff ? 100 + 16 + action.diff.length * 17 + (action.more ? 14 : 0) : 100) : 84];
   else if (activeToast) size = [Math.min(420, Math.max(260, 90 + activeToast.text.length * 6.6)), 40];
   else if (slim) size = COMPACT.slim;
   else size = COMPACT[mode];
@@ -897,8 +1042,10 @@ export default function KonIsland() {
   /* Brilho por estado: âmbar = precisa de você · verde = concluído/soltar arquivo · roxo = erro */
   const tone = dragging ? "green"
     : devMood === "error" || (view === "ask" && askError && !["NO_KEY", "WEB"].includes(askError.code)) || (view === "ocr" && ocrError) || activeToast?.kind === "error" ? "purple"
-      : devMood === "attention" || claude.note || action?.kind === "perm" || action?.kind === "meeting" || (view === "ask" && askError?.code === "NO_KEY") ? "amber"
+      : devMood === "attention" || claude.note || action?.kind === "perm" || action?.kind === "meeting" || action?.kind === "reminder" || (view === "ask" && askError?.code === "NO_KEY") ? "amber"
         : success || devMood === "done" || action?.kind === "update" || (view === "compact" && claudeRecent) ? "green" : null;
+  const accentStops = (ACCENTS[settings.accent] || ACCENTS.aurora).stops;
+  const glowK = Math.max(0, Math.min(1.5, settings.glow ?? 1));
   const TONE_COLOR = { amber: "rgba(239,159,39,.55)", green: "rgba(29,158,117,.5)", purple: "rgba(127,119,221,.55)" };
 
   /* Regiões clicáveis para o click-through dinâmico (o main consulta o cursor do sistema) */
@@ -911,8 +1058,8 @@ export default function KonIsland() {
     bridge.setHitRects(rects);
   }, [w, h, islandTop, settings.devDock, nScale, slim, view, dragging]);
   useEffect(() => {
-    bridge.pin(["ask", "translate", "ocr", "sheet"].includes(view) || adding);
-  }, [view, adding]);
+    bridge.pin(["ask", "translate", "ocr", "sheet"].includes(view) || adding || !!qForm);
+  }, [view, adding, qForm]);
 
   const li = lyricLines && (REAL ? lyrics.synced : true) ? lyricAt(lyricLines, pos) : 0;
   const currentLyric = lyricLines?.[li]?.text || `${trackTitle} — ${trackArtist}`;
@@ -1053,8 +1200,38 @@ export default function KonIsland() {
       <motion.div className="relative w-[132px] h-[132px] rounded-2xl overflow-hidden shrink-0 shadow-[0_12px_30px_rgba(214,58,134,0.35)]" animate={{ scale: playing ? 1 : 0.9 }} transition={SPRING}>
         {cover("mus")}
       </motion.div>
+      <button onClick={() => setMixOpen((v) => !v)} title="Saída de áudio e volume por app"
+        className={`absolute top-0 right-0 z-10 h-6 px-2 rounded-full flex items-center gap-1 text-[10.5px] font-medium ${mixOpen ? "bg-white text-black" : "bg-white/[0.08] text-white/65 hover:bg-white/[0.14]"}`}>
+        <Volume2 size={11} /> {mixOpen ? "Voltar" : "Áudio"}
+      </button>
+      {mixOpen ? (
+        <div className="relative flex-1 min-w-0 h-full flex flex-col gap-1.5 pt-0.5 pr-0.5 overflow-hidden">
+          <div className="text-[10px] font-semibold tracking-[0.1em] text-white/40">SAÍDA</div>
+          <div className="flex flex-wrap gap-1 pr-16">
+            {(mix?.devices || []).map((d) => (
+              <button key={d.id} onClick={async () => { setMix((m) => ({ ...m, devices: m.devices.map((x) => ({ ...x, default: x.id === d.id })) })); const r = await bridge.mixSetDevice(d.id); if (r?.ok) setMix(r); }}
+                className={`h-[24px] max-w-[190px] px-2.5 rounded-full text-[11px] truncate ${d.default ? "bg-white text-black font-semibold" : "bg-white/[0.07] text-white/75 hover:bg-white/[0.12]"}`}>{d.name}</button>
+            ))}
+            {!mix && <span className="text-[11px] text-white/40">{REAL ? "Lendo os dispositivos…" : ""}</span>}
+            {mix && !mix.ok && <span className="text-[11px] text-amber-300/80">Não consegui ler o áudio do Windows</span>}
+          </div>
+          <div className="text-[10px] font-semibold tracking-[0.1em] text-white/40 mt-0.5">APPS</div>
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 [scrollbar-width:none]">
+            {(mix?.apps || []).map((a) => (
+              <div key={a.name} className="flex items-center gap-2 h-[24px]">
+                <button onClick={async () => { setMix((m) => ({ ...m, apps: m.apps.map((x) => (x.name === a.name ? { ...x, muted: !x.muted } : x)) })); bridge.mixAppMute(a.pids, !a.muted); }}
+                  className={`w-6 h-6 grid place-items-center rounded-full shrink-0 ${a.muted ? "text-red-300" : "text-white/60 hover:text-white"}`}>{a.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button>
+                <span className="w-[110px] text-[11.5px] truncate" title={a.title}>{a.title}</span>
+                <input type="range" min="0" max="100" value={a.volume} onChange={(e) => setAppVol(a, +e.target.value)} className="kon-range flex-1" />
+                <span className="w-7 text-right text-[10.5px] tabular-nums text-white/50">{a.volume}</span>
+              </div>
+            ))}
+            {mix?.ok && !mix.apps?.length && <span className="text-[11px] text-white/40">Nenhum app tocando som agora</span>}
+          </div>
+        </div>
+      ) : (
       <div className="relative flex-1 min-w-0 flex flex-col">
-        <div className="text-[12px] text-white/60 truncate">{trackTitle} — {trackArtist}</div>
+        <div className="text-[12px] text-white/60 truncate pr-16">{trackTitle} — {trackArtist}</div>
         <div className="relative h-[52px] overflow-hidden mt-1.5" style={{ maskImage: "linear-gradient(black 70%, transparent)" }}>
           <motion.div animate={{ y: -li * 26 }} transition={SPRING}>
             {(privacy ? [{ t: 0, text: "Lyrics hidden" }] : lyricsView).map((l, i) => (
@@ -1081,6 +1258,7 @@ export default function KonIsland() {
           <button onClick={() => setRepeat((s) => !s)} className={repeat ? "text-white" : "text-white/40 hover:text-white/70"}><Repeat size={15} /></button>
         </div>
       </div>
+      )}
     </div>
   );
 
@@ -1089,12 +1267,25 @@ export default function KonIsland() {
       <div className="flex items-start justify-between">
         <div>
           <div className="text-4xl font-semibold tabular-nums font-mono tracking-tight leading-none">{fmt(remaining)}</div>
-          <div className="text-[12px] text-white/45 mt-2">Done at {doneAt}</div>
+          <div className="text-[12px] text-white/45 mt-2">Termina às {doneAt}{settings.focusDnd !== false && REAL ? " · Não incomodar ligado" : ""}</div>
+          {(() => {
+            const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+            const week = focusLog.filter((f) => f.at >= d0.getTime());
+            const mins = week.reduce((a, f) => a + f.minutes, 0);
+            const per = Array.from({ length: 7 }, (_, i) => { const a = d0.getTime() + i * 864e5; return week.filter((f) => f.at >= a && f.at < a + 864e5).reduce((x, f) => x + f.minutes, 0); });
+            const mx = Math.max(25, ...per);
+            return (
+              <div className="flex items-end gap-2 mt-2" title="Sessões de foco concluídas nos últimos 7 dias">
+                <div className="flex items-end gap-[3px] h-[18px]">{per.map((m, i) => <span key={i} className={`w-[5px] rounded-[2px] ${i === 6 ? "bg-purple-400" : "bg-white/25"}`} style={{ height: `${Math.max(12, (m / mx) * 100)}%`, opacity: m ? 1 : 0.4 }} />)}</div>
+                <span className="text-[11px] text-white/50 tabular-nums">{week.length} {week.length === 1 ? "sessão" : "sessões"} na semana · {Math.floor(mins / 60)}h{String(mins % 60).padStart(2, "0")}</span>
+              </div>
+            );
+          })()}
         </div>
         <div className="flex gap-2">
           <motion.button whileTap={{ scale: 0.92 }} onClick={addFive} className="h-8 px-3.5 rounded-full bg-white/10 hover:bg-white/15 text-white text-[12.5px]">+5 min</motion.button>
-          <motion.button whileTap={{ scale: 0.92 }} onClick={stopTimer} className="h-8 px-3.5 rounded-full bg-white/10 hover:bg-white/15 text-white text-[12.5px]">Stop</motion.button>
-          <motion.button whileTap={{ scale: 0.92 }} onClick={toggleTimer} className="h-8 px-4 rounded-full bg-white text-black font-medium text-[12.5px] min-w-[64px]">{timerRunning ? "Pause" : "Start"}</motion.button>
+          <motion.button whileTap={{ scale: 0.92 }} onClick={stopTimer} className="h-8 px-3.5 rounded-full bg-white/10 hover:bg-white/15 text-white text-[12.5px]">Parar</motion.button>
+          <motion.button whileTap={{ scale: 0.92 }} onClick={toggleTimer} className="h-8 px-4 rounded-full bg-white text-black font-medium text-[12.5px] min-w-[72px]">{timerRunning ? "Pausar" : "Começar"}</motion.button>
         </div>
       </div>
       <Ruler remaining={remaining} onPick={pickMinutes} />
@@ -1230,7 +1421,9 @@ export default function KonIsland() {
   const taskDaySet = new Set(icsOn ? calEvents.map((e) => dayKey(new Date(e.start))) : TASK_DAYS.map((o) => dayKey(new Date(today.getTime() + o * 864e5))));
   const todayEvents = calEvents.filter((e) => dayKey(new Date(e.start)) === dayKey(today))
     .map((e) => ({ id: e.id, type: "event", cal: true, title: e.title, time: e.allDay ? "dia todo" : fmtHM(e.start), allDay: e.allDay, link: e.link, past: e.end < nowMs }));
-  const listTodos = icsOn ? [...todayEvents, ...todos.filter((t) => t.type === "task")] : todos;
+  const remItems = reminders.filter((r) => !r.fired && r.at - nowMs < 36 * 3600e3).sort((a, b) => a.at - b.at)
+    .map((r) => ({ id: `rem-${r.id}`, remId: r.id, type: "event", rem: true, title: r.text, time: new Date(r.at).toDateString() === now.toDateString() ? fmtHM(r.at) : `amanhã ${fmtHM(r.at)}`, allDay: true }));
+  const listTodos = [...remItems, ...(icsOn ? [...todayEvents, ...todos.filter((t) => t.type === "task")] : todos)];
   const weekStart = new Date(today); weekStart.setDate(today.getDate() - today.getDay());
   const monthFirst = new Date(today.getFullYear(), today.getMonth(), 1);
   const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
@@ -1276,10 +1469,12 @@ export default function KonIsland() {
             {icsOn && todayEvents.length === 0 && <div className="text-[11px] text-white/35 px-1">Nenhum evento hoje na agenda</div>}
             {listTodos.map((t) => (
               <motion.div key={t.id} layout initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: 20 }} transition={SPRING}
-                onClick={() => { if (t.cal) { if (t.link) bridge.openExternal(t.link); return; } if (t.type === "task" && !editing) setTodos((l) => l.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x))); }}
+                onClick={() => { if (t.rem) return; if (t.cal) { if (t.link) bridge.openExternal(t.link); return; } if (t.type === "task" && !editing) setTodos((l) => l.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x))); }}
                 title={t.link ? "Abrir a reunião" : undefined}
                 className={`flex items-center gap-2 bg-white/[0.05] rounded-lg px-3 py-1.5 ${t.past ? "opacity-45" : ""} ${(t.type === "task" && !editing) || t.link ? "cursor-pointer hover:bg-white/[0.08]" : ""}`}>
-                {t.type === "event" ? (
+                {t.rem ? (
+                  <Bell size={13} className="text-amber-300 shrink-0" />
+                ) : t.type === "event" ? (
                   <span className="w-[13px] h-[13px] rounded-[3px] bg-purple-500 shrink-0 shadow-[0_0_6px_rgba(168,85,247,.7)]" />
                 ) : (
                   <motion.span className="w-[14px] h-[14px] rounded-full grid place-items-center shrink-0" initial={false}
@@ -1292,7 +1487,7 @@ export default function KonIsland() {
                 {t.link && <Video size={11} className="text-purple-300/80 shrink-0" />}
                 {t.type === "event" && <span className="text-[11px] tabular-nums text-white/50">{t.time}</span>}
                 {editing && !t.cal && (
-                  <button onClick={(e) => { e.stopPropagation(); setTodos((l) => l.filter((x) => x.id !== t.id)); }} className="text-white/40 hover:text-red-400"><Trash2 size={12} /></button>
+                  <button onClick={async (e) => { e.stopPropagation(); if (t.rem) { setReminders(await bridge.remRemove(t.remId)); return; } setTodos((l) => l.filter((x) => x.id !== t.id)); }} className="text-white/40 hover:text-red-400"><Trash2 size={12} /></button>
                 )}
               </motion.div>
             ))}
@@ -1651,7 +1846,100 @@ export default function KonIsland() {
     </div>
   );
 
-  const TABS = { home: HomeTab, files: FilesTab, clip: ClipTab, music: MusicTab, focus: FocusTab, water: WaterTab, weather: WeatherTab, todo: TodoTab, claude: ClaudeTab, sleep: SleepTab, lock: LockTab };
+  const QK = { app: [AppWindow, "Programa"], folder: [FolderOpen, "Pasta"], site: [Link2, "Site"], cmd: [TerminalSquare, "Comando"] };
+  const QuickTab = (
+    <div className="h-full flex flex-col">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-baseline gap-2"><span className="text-[15px] font-semibold tracking-tight">Atalhos</span><span className="text-[11px] text-white/40">{quick.length ? "um clique para abrir" : "seus apps, pastas, sites e comandos"}</span></div>
+        <div className="flex gap-1.5">
+          {quick.length > 0 && <PillBtn onClick={() => setQEdit((v) => !v)} primary={qEdit}><Pencil size={11} /> {qEdit ? "Pronto" : "Editar"}</PillBtn>}
+          {!qForm && <PillBtn onClick={() => { setQForm({ kind: "app", label: "", target: "" }); bridge.focus(); }}><Plus size={11} /> Adicionar</PillBtn>}
+        </div>
+      </div>
+      {qForm ? (
+        <div className="flex-1 flex flex-col gap-2">
+          <Seg id="qkind" small value={qForm.kind} onChange={(k) => { setQForm((f) => ({ ...f, kind: k })); setTimeout(() => qInputRef.current?.focus({ preventScroll: true }), 30); }} options={Object.entries(QK).map(([k, v]) => [k, v[1]])} />
+          <div className="flex gap-1.5">
+            <input ref={qInputRef} autoFocus value={qForm.target} onChange={(e) => setQForm((f) => ({ ...f, target: e.target.value }))} onKeyDown={(e) => { if (e.key === "Enter") addQuick(); if (e.key === "Escape") { e.stopPropagation(); setQForm(null); } }}
+              placeholder={{ app: "C:\\Program Files\\…\\app.exe", folder: "C:\\Users\\você\\Obras", site: "sinapi.caixa.gov.br", cmd: "code C:\\Projetos\\kon" }[qForm.kind]}
+              className="flex-1 min-w-0 h-8 px-2.5 rounded-lg bg-white/[0.06] border border-white/[0.08] outline-none text-[12px] text-white placeholder:text-white/30 focus:border-indigo-400/60" />
+            {(qForm.kind === "app" || qForm.kind === "folder") && REAL && <PillBtn onClick={async () => { const p = await bridge.quickPick(qForm.kind); if (p) setQForm((f) => ({ ...f, target: p })); }}>Escolher…</PillBtn>}
+          </div>
+          <input value={qForm.label} onChange={(e) => setQForm((f) => ({ ...f, label: e.target.value }))} onKeyDown={(e) => e.key === "Enter" && addQuick()} placeholder="Nome (opcional)"
+            className="h-8 px-2.5 rounded-lg bg-white/[0.06] border border-white/[0.08] outline-none text-[12px] text-white placeholder:text-white/30 focus:border-indigo-400/60" />
+          <div className="flex justify-between items-center mt-auto">
+            <span className="text-[10.5px] text-white/35">{qForm.kind === "cmd" ? "O comando abre numa janela do Prompt para você ver a saída." : "Enter para salvar · Esc cancela"}</span>
+            <div className="flex gap-1.5"><PillBtn onClick={() => setQForm(null)}>Cancelar</PillBtn><PillBtn primary onClick={addQuick}>Salvar</PillBtn></div>
+          </div>
+        </div>
+      ) : quick.length === 0 ? (
+        <div className="flex-1 rounded-2xl border border-dashed border-white/15 grid place-items-center text-center px-6">
+          <div><Zap size={20} className="mx-auto text-white/35 mb-1.5" /><div className="text-[13px] text-white/70">Adicione o que você abre todo dia</div><div className="text-[11px] text-white/35 mt-0.5">Programas, pastas de obra, sites e até comandos</div></div>
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 overflow-y-auto grid grid-cols-5 gap-1.5 content-start [scrollbar-width:none]">
+          {quick.map((q) => {
+            const [I] = QK[q.kind] || QK.app;
+            return (
+              <motion.div key={q.id} layout className="relative">
+                <button onClick={async () => { if (qEdit) return; const r = await bridge.quickRun(q); if (!r.ok) toast(r.error || "Não consegui abrir", "error"); else toCompact(); }}
+                  title={q.target} className={`w-full h-[72px] rounded-xl bg-white/[0.05] border border-white/[0.06] hover:bg-white/[0.1] flex flex-col items-center justify-center gap-1.5 px-1.5 ${qEdit ? "animate-pulse" : ""}`}>
+                  <span className="w-8 h-8 rounded-lg bg-white/[0.06] grid place-items-center overflow-hidden">{qIcons[q.id] ? <img src={qIcons[q.id]} alt="" className="w-6 h-6" draggable={false} onError={() => setQIcons((m) => ({ ...m, [q.id]: "" }))} /> : <I size={16} className="text-white/75" />}</span>
+                  <span className="text-[11px] truncate max-w-full">{q.label}</span>
+                </button>
+                {qEdit && <button onClick={() => setQuick((l) => l.filter((x) => x.id !== q.id))} className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-500 text-white grid place-items-center"><X size={11} /></button>}
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  const GB = (b) => (b / 1024 ** 3).toFixed(1).replace(".", ",");
+  const memPct = sys ? Math.round((sys.mem.used / sys.mem.total) * 100) : 0;
+  const diskPct = sys?.disk ? Math.round(((sys.disk.total - sys.disk.free) / sys.disk.total) * 100) : 0;
+  const barC = (p) => (p >= 90 ? "bg-red-400" : p >= 75 ? "bg-amber-400" : "bg-emerald-400");
+  const SystemTab = !sys ? <div className="h-full grid place-items-center text-[12px] text-white/45">Lendo o sistema…</div> : (
+    <div className="h-full grid grid-cols-[1fr_1fr] gap-2.5">
+      <div className="grid grid-cols-2 gap-2">
+        <div className={`${card} flex flex-col items-center justify-center bg-white/[0.03]`} title={sys.cpuModel}>
+          <svg width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="5" />
+            <motion.circle cx="32" cy="32" r="26" fill="none" stroke={sys.cpu >= 90 ? "#f87171" : sys.cpu >= 70 ? "#fbbf24" : "#34d399"} strokeWidth="5" strokeLinecap="round" strokeDasharray={163.4} initial={false} animate={{ strokeDashoffset: 163.4 * (1 - sys.cpu / 100) }} transition={SPRING} transform="rotate(-90 32 32)" />
+            <text x="32" y="37" textAnchor="middle" fill="#fff" fontSize="14" fontWeight="600">{sys.cpu}%</text></svg>
+          <span className="text-[10.5px] text-white/45 mt-0.5">CPU · {sys.cores} núcleos</span>
+        </div>
+        <div className="flex flex-col gap-2">
+          {[[MemoryStick, "Memória", memPct, `${GB(sys.mem.used)} de ${GB(sys.mem.total)} GB`], [HardDrive, `Disco ${sys.disk?.root?.replace(/\\$/, "") || ""}`, diskPct, sys.disk ? `${GB(sys.disk.free)} GB livres` : "—"]].map(([I, l, p, sub]) => (
+            <div key={l} className={`${card} flex-1 bg-white/[0.03] py-2`}>
+              <div className="flex items-center justify-between text-[10.5px] text-white/50"><span className="flex items-center gap-1"><I size={11} />{l}</span><span className="tabular-nums text-white/80">{p}%</span></div>
+              <div className="h-[4px] rounded-full bg-white/10 mt-1.5 overflow-hidden"><motion.div className={`h-full rounded-full ${barC(p)}`} initial={false} animate={{ width: `${p}%` }} transition={SPRING} /></div>
+              <div className="text-[10.5px] text-white/40 mt-1 tabular-nums">{sub}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className={`${card} bg-white/[0.03] flex flex-col`}>
+        <div className="flex items-center justify-between text-[10px] font-semibold tracking-[0.1em] text-white/40"><span>MAIS PESADOS AGORA</span><span className="font-normal tracking-normal tabular-nums">ligado há {Math.floor(sys.uptime / 3600)}h{String(Math.floor((sys.uptime % 3600) / 60)).padStart(2, "0")}</span></div>
+        <div className="flex flex-col gap-1 mt-2">
+          {(sys.top || []).slice(0, 4).map((p) => (
+            <div key={p.name} className="flex items-center gap-2 text-[11.5px]">
+              <span className="flex-1 truncate">{p.name}</span>
+              <span className="w-14 text-right tabular-nums text-white/50">{p.mem >= 1024 ? `${(p.mem / 1024).toFixed(1).replace(".", ",")} GB` : `${p.mem} MB`}</span>
+              <span className={`w-12 text-right tabular-nums ${p.cpu >= 50 ? "text-red-300" : p.cpu >= 20 ? "text-amber-300" : "text-white/80"}`}>{String(p.cpu).replace(".", ",")}%</span>
+            </div>
+          ))}
+          {!(sys.top || []).length && <span className="text-[11px] text-white/40">{REAL ? "Calculando…" : "—"}</span>}
+        </div>
+        <div className="mt-auto flex items-center justify-between gap-2">
+          <span className="text-[10px] text-white/35 leading-tight">Avisa no notch se a CPU ou a memória ficarem no limite por 30 s</span>
+          <Switch on={settings.sysAlerts !== false} onChange={(v) => saveSettings({ sysAlerts: v })} color="#10b981" />
+        </div>
+      </div>
+    </div>
+  );
+
+  const TABS = { home: HomeTab, files: FilesTab, clip: ClipTab, quick: QuickTab, system: SystemTab, music: MusicTab, focus: FocusTab, water: WaterTab, weather: WeatherTab, todo: TodoTab, claude: ClaudeTab, sleep: SleepTab, lock: LockTab };
   const UTIL = [
     { id: "sleep", nav: "SLEEP", Icon: Moon, on: dnd || sleepLeft !== null, color: "text-indigo-300" },
     { id: "lock", nav: "LOCK", Icon: locked ? Lock : LockOpen, on: locked || privacy, color: "text-amber-300" },
@@ -1713,6 +2001,7 @@ export default function KonIsland() {
   const askMood = listening ? "listening" : askPhase === "thinking" || askPhase === "streaming" ? "working"
     : askPhase === "done" ? (askError ? (askError.code === "NO_KEY" ? "attention" : "error") : "done") : "idle";
   const canAsk = (query.trim() || (askFile && !askFile.sent)) && !inline && !/=\s*$/.test(query);
+  const defaultFileQ = askFile?.screen ? "O que está na minha tela? Resuma o que importa." : "Resuma este arquivo.";
   const provider = settings.provider;
   const AskView = (
     <div className="absolute top-0 left-0 right-0 mx-auto flex flex-col" style={{ width: 540, height: h }}>
@@ -1727,12 +2016,12 @@ export default function KonIsland() {
         <div className={inline ? "relative inline-grid shrink-0 ml-1" : "relative grid flex-1 min-w-0"}>
           {inline && <span className="invisible whitespace-pre col-start-1 row-start-1 text-[14.5px] tracking-tight pr-1">{query}</span>}
           <input ref={askInputRef} size={1} value={query} onChange={(e) => onQueryChange(e.target.value)}
-            placeholder={listening ? "Ouvindo… fale em português" : askFile && !askFile.sent ? `Pergunte sobre ${askFile.name}` : askPhase === "idle" ? "Pergunte ao Kon" : "Pergunte de novo"}
+            placeholder={listening ? "Ouvindo… fale em português" : askFile && !askFile.sent ? (askFile.screen ? "Pergunte sobre a tela" : `Pergunte sobre ${askFile.name}`) : askPhase === "idle" ? "Pergunte ao Kon" : "Pergunte de novo"}
             onKeyDown={(e) => {
               if (e.key === "Tab") { e.preventDefault(); openTranslate(query); }
               else if (e.key === "Enter") {
-                if (canAsk) submitAsk(query.trim() || "Resuma este arquivo.");
-                else if (inline && !/carregando|desconhecida/.test(inline.text)) copy(inline.text.replace(/ /g, " "), "inline");
+                if (canAsk) submitAsk(query.trim() || defaultFileQ);
+                else if (inline && !/carregando|desconhecida|grandezas/.test(inline.text)) copy(inline.text.replace(/ /g, " "), "inline");
               }
             }}
             className="col-start-1 row-start-1 w-full min-w-0 bg-transparent outline-none text-[14.5px] text-white placeholder:text-white/35 tracking-tight" />
@@ -1762,10 +2051,16 @@ export default function KonIsland() {
             <button onClick={toggleVoice} title="Ditar (pt-BR)" className={`w-7 h-7 rounded-full grid place-items-center shrink-0 transition-colors ${listening ? "bg-red-500/90 text-white" : "text-white/45 hover:text-white hover:bg-white/10"}`}>
               {listening ? <Square size={11} fill="currentColor" /> : <Mic size={15} />}
             </button>
+            <button onClick={async () => {
+              const r = await bridge.captureScreen();
+              if (!r.ok) { toast(r.error || "Não consegui capturar a tela", "error"); return; }
+              const f = { path: r.path, name: r.name, screen: true };
+              setAskFile(f); askFileRef.current = f; askInputRef.current?.focus({ preventScroll: true });
+            }} title="Perguntar sobre a tela" className="w-7 h-7 rounded-full grid place-items-center text-white/45 hover:text-white hover:bg-white/10 shrink-0"><Monitor size={15} /></button>
             <button onClick={() => openTranslate(query)} title="Traduzir (Tab)" className="w-7 h-7 rounded-full grid place-items-center text-white/45 hover:text-white hover:bg-white/10 shrink-0"><Languages size={15} /></button>
           </>
         )}
-        <button onClick={() => (canAsk ? submitAsk(query.trim() || "Resuma este arquivo.") : askInputRef.current?.focus({ preventScroll: true }))} className="w-7 h-7 rounded-full grid place-items-center text-white/70 hover:text-white hover:bg-white/10 shrink-0"><Search size={15} /></button>
+        <button onClick={() => (canAsk ? submitAsk(query.trim() || defaultFileQ) : askInputRef.current?.focus({ preventScroll: true }))} className="w-7 h-7 rounded-full grid place-items-center text-white/70 hover:text-white hover:bg-white/10 shrink-0"><Search size={15} /></button>
       </div>
       {askOpen && (
         <>
@@ -1923,9 +2218,43 @@ export default function KonIsland() {
     </div>
   );
 
+  /* ═════════ Ações no texto selecionado ═════════ */
+  const taMood = ta.error || ta.status === "error" ? "attention" : ta.status === "working" ? "working" : ta.status === "done" ? "done" : "idle";
+  const TextActView = (
+    <div className="absolute top-0 left-0 right-0 mx-auto flex flex-col px-4 py-2.5" style={{ width: 540, height: h }}>
+      <div className="flex items-center gap-2.5 h-[30px] shrink-0">
+        <KonTofu mood={taMood} size={0.8} />
+        <div className="flex-1 min-w-0">
+          <div className="text-[12.5px] font-semibold tracking-tight">{ta.error ? ta.error : "Texto selecionado"}</div>
+          {!ta.error && <div className={`text-[11px] text-white/45 truncate ${privacy ? "blur-[4px]" : ""}`}>{ta.text.replace(/\s+/g, " ")}</div>}
+        </div>
+        <button onClick={toCompact} className="w-6 h-6 rounded-full grid place-items-center text-white/50 hover:text-white hover:bg-white/10 shrink-0"><X size={13} /></button>
+      </div>
+      {!ta.error && (
+        <div className="flex flex-wrap gap-1.5 mt-2 shrink-0">
+          {TEXT_ACTIONS.map(([id, label]) => (
+            <button key={id} onClick={() => runTextAction(id)} disabled={ta.status === "working"}
+              className={`h-[26px] px-2.5 rounded-full text-[11.5px] font-medium transition-colors ${ta.action === id ? "bg-white text-black" : "bg-white/[0.08] text-white/80 hover:bg-white/[0.14]"}`}>{label}</button>
+          ))}
+        </div>
+      )}
+      {ta.status === "working" && <div className="mt-2.5 text-[12px] text-white/45 flex items-center gap-0.5">Escrevendo{[0, 1, 2].map((i) => <motion.span key={i} animate={{ opacity: [0.2, 1, 0.2] }} transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.15 }}>.</motion.span>)}</div>}
+      {(ta.status === "done" || ta.status === "error") && (<>
+        <div className={`flex-1 min-h-0 overflow-y-auto mt-2 text-[12.5px] leading-[18px] whitespace-pre-wrap select-text ${ta.status === "error" ? "text-amber-200/90" : "text-white"}`}>{ta.result}</div>
+        {ta.status === "done" && (
+          <div className="flex justify-end gap-1.5 shrink-0 pt-1.5">
+            <PillBtn onClick={async () => { await bridge.copy(ta.result); toast("Copiado", "success", "check"); toCompact(); }}><Copy size={11} /> Copiar</PillBtn>
+            {ta.action !== "explicar" && <PillBtn primary onClick={async () => { toCompact(); const ok = await bridge.textPaste(ta.result); if (!ok) toast("Copiei o texto; cole com Ctrl+V", "info"); }}><Check size={11} /> Colar no lugar</PillBtn>}
+          </div>
+        )}
+      </>)}
+    </div>
+  );
+
   /* ═════════ Card de ação padrão ═════════ */
   const ActionView = action && (
-    <div className="absolute top-0 left-0 right-0 mx-auto flex items-center gap-3 pl-4 pr-3.5" style={{ width: w, height: h }}>
+    <div className="absolute top-0 left-0 right-0 mx-auto flex flex-col justify-center pl-4 pr-3.5" style={{ width: w, height: h }}>
+      <div className="flex items-center gap-3">
       <div className="w-[46px] grid place-items-center shrink-0"><KonTofu mood={action.mood} size={1.45} /></div>
       <div className="flex-1 min-w-0">
         <div className="text-[13.5px] font-semibold tracking-tight truncate">{action.title}</div>
@@ -1943,6 +2272,9 @@ export default function KonIsland() {
         {action.kind === "perm" ? (<>
           <PillBtn onClick={() => decidePerm(perm.id, "deny")}>Negar</PillBtn>
           <PillBtn onClick={() => decidePerm(perm.id, "allow")} primary>Permitir</PillBtn>
+        </>) : action.kind === "reminder" ? (<>
+          <PillBtn onClick={() => closeReminder(dueRems[0], 10)}>Adiar 10 min</PillBtn>
+          <PillBtn primary onClick={() => closeReminder(dueRems[0])}><Check size={11} /> Ok</PillBtn>
         </>) : action.kind === "update" ? (<>
           <PillBtn onClick={() => setDismissed((d) => ({ ...d, [action.key]: true }))}>Depois</PillBtn>
           <PillBtn onClick={() => bridge.updateInstall()} primary><RefreshCw size={11} /> Reiniciar</PillBtn>
@@ -1951,6 +2283,17 @@ export default function KonIsland() {
           {meetingSoon?.link && <PillBtn onClick={() => { bridge.openExternal(meetingSoon.link); setDismissed((d) => ({ ...d, [action.key]: true })); }} primary><Video size={11} /> Entrar</PillBtn>}
         </>)}
       </div>
+      </div>
+      {action.diff && (
+        <div className={`mt-2 ml-[58px] rounded-lg bg-white/[0.04] border border-white/[0.06] py-1 font-mono text-[11px] leading-[17px] overflow-hidden ${privacy ? "blur-[4px]" : ""}`}>
+          {action.diff.map(([k, line], idx) => (
+            <div key={idx} className={`flex px-2 ${k === "-" ? "bg-red-500/[0.12] text-red-200/90" : "bg-emerald-500/[0.12] text-emerald-200/90"}`}>
+              <span className="w-3.5 shrink-0 opacity-60">{k}</span><span className="truncate whitespace-pre">{line}</span>
+            </div>
+          ))}
+          {action.more > 0 && <div className="px-2 text-[10px] text-white/35 leading-[14px]">+{action.more} {action.more === 1 ? "linha" : "linhas"}</div>}
+        </div>
+      )}
     </div>
   );
 
@@ -2058,6 +2401,36 @@ export default function KonIsland() {
       </div>
     </div>
   );
+  const ReportPane = (
+    <div className="flex flex-col gap-2.5 h-full">
+      {rep.status !== "done" ? (<>
+        <textarea autoFocus value={rep.note} onChange={(e) => setRep((r) => ({ ...r, note: e.target.value }))} maxLength={2000}
+          placeholder="O que aconteceu? Ex.: cliquei em Música e o painel fechou sozinho"
+          className="h-[120px] resize-none rounded-xl bg-white/[0.06] border border-white/[0.08] focus:border-indigo-400/60 outline-none p-3 text-[12.5px] leading-[18px] text-white placeholder:text-white/30" />
+        <div className="flex items-center gap-2.5 h-9 px-2.5 rounded-xl bg-white/[0.04]">
+          <Camera size={13} className="text-white/50" />
+          <span className="flex-1 text-[11.5px] font-medium">Incluir um print da tela</span>
+          <Switch on={rep.shot} onChange={(v) => setRep((r) => ({ ...r, shot: v }))} color="#10b981" />
+        </div>
+        <div className="text-[10.5px] text-white/40 leading-snug">O relatório leva a versão, os registros de erro e de atualização e seus ajustes, sem chaves de API, sem o link da agenda e sem o conteúdo dos seus arquivos ou da área de transferência.</div>
+        <div className="mt-auto flex justify-end gap-1.5">
+          <PillBtn onClick={() => setSheetTab("settings")}>Cancelar</PillBtn>
+          <PillBtn primary onClick={async () => { setRep((r) => ({ ...r, status: "working" })); const r = await bridge.report({ note: rep.note, withShot: rep.shot }); setRep((x) => ({ ...x, status: r.ok ? "done" : "idle", result: r })); if (!r.ok) toast(r.error || "Não consegui gerar o relatório", "error"); }}>
+            {rep.status === "working" ? "Gerando…" : "Gerar relatório"}
+          </PillBtn>
+        </div>
+      </>) : (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3"><KonTofu mood="done" size={1.3} /><div><div className="text-[14px] font-semibold">Relatório pronto</div><div className="text-[11.5px] text-white/50">{rep.result?.zip ? "Salvei o arquivo .zip na sua Área de Trabalho." : "Abra a página para enviar."}</div></div></div>
+          <div className="text-[11.5px] text-white/60 leading-snug">Abra a página no GitHub, arraste o arquivo para lá e clique em <b>Submit new issue</b>. Também pode me mandar o arquivo direto aqui no chat.</div>
+          <div className="flex gap-1.5">
+            <PillBtn primary onClick={() => bridge.openExternal(rep.result.url)}><ExternalLink size={11} /> Abrir no GitHub</PillBtn>
+            {rep.result?.zip && <PillBtn onClick={() => bridge.reportReveal(rep.result.zip)}><FolderOpen size={11} /> Mostrar arquivo</PillBtn>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
   const SettingsPane = (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center justify-between">
@@ -2137,6 +2510,33 @@ export default function KonIsland() {
       {SwitchRow(EyeOff, "Esconder em tela cheia", "hideFullscreen", "jogos, vídeos e apresentações")}
       {SwitchRow(Minus, "Linha fina sobre janelas maximizadas", "slimOverMax", "passe o mouse para ver o notch")}
       {SwitchRow(ShieldCheck, "Fora de prints e compartilhamento de tela", "hideInCapture", "Teams, Meet, Discord e gravações não mostram o Kon")}
+      <div className="flex items-center gap-2 min-h-[36px] py-1 px-2.5 rounded-xl bg-white/[0.04]">
+        <span className="text-[11.5px] font-medium shrink-0">Cor</span>
+        <div className="flex gap-1.5 flex-1 justify-end">
+          {Object.entries(ACCENTS).map(([k, a]) => (
+            <button key={k} onClick={() => saveSettings({ accent: k })} title={a.label}
+              className={`w-[22px] h-[22px] rounded-full ring-2 transition ${(settings.accent || "aurora") === k ? "ring-white" : "ring-transparent hover:ring-white/30"}`}
+              style={{ background: `linear-gradient(135deg,${a.stops[0]},${a.stops[3]})` }} />
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2.5 h-9 px-2.5 rounded-xl bg-white/[0.04]">
+        <span className="text-[11.5px] font-medium shrink-0">Brilho</span>
+        <input type="range" min="0" max="150" step="5" value={Math.round((settings.glow ?? 1) * 100)} onChange={(e) => setSettings((st) => ({ ...st, glow: +e.target.value / 100 }))}
+          onMouseUp={(e) => saveSettings({ glow: +e.currentTarget.value / 100 })} className="kon-range flex-1" />
+        <span className="w-9 text-right text-[10.5px] tabular-nums text-white/50">{Math.round((settings.glow ?? 1) * 100)}%</span>
+      </div>
+      {SwitchRow(Moon, "Não incomodar do Windows durante o Focus", "focusDnd", "silencia notificações enquanto o timer roda")}
+      {REAL && (
+        <div className="flex items-center gap-2.5 min-h-[36px] py-1 px-2.5 rounded-xl bg-white/[0.04]">
+          <Mic size={13} className="text-white/50 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[11.5px] font-medium">Chamar pela voz: diga "Kon"</div>
+            <div className={`text-[10px] leading-tight truncate ${wake.error ? "text-amber-300/80" : "text-white/35"}`}>{wake.error || (wake.on ? `Ouvindo só a palavra "Kon" · offline${wake.lang ? ` (${wake.lang})` : ""}` : "Reconhecimento de voz do Windows, offline; nada é gravado")}</div>
+          </div>
+          <Switch on={settings.wakeWord === true} onChange={(v) => saveSettings({ wakeWord: v })} color="#10b981" />
+        </div>
+      )}
       <div className="text-[10.5px] font-semibold tracking-[0.1em] text-white/40 mt-1">AGENDA</div>
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-white/[0.06] border border-white/[0.08] focus-within:border-indigo-400/60">
@@ -2170,7 +2570,7 @@ export default function KonIsland() {
           <div className="flex-1 min-w-0">
             <div className="text-[11.5px] font-medium">Kon {appVersion} · atualizar sozinho</div>
             <div className={`text-[10px] leading-tight truncate ${updStatus.state === "error" ? "text-amber-300/80" : updStatus.state === "ready" ? "text-emerald-300" : "text-white/40"}`}>
-              {{ checking: "Procurando…", downloading: `Baixando o Kon ${updStatus.version || ""} · ${updStatus.percent || 0}%`, ready: `Kon ${updStatus.version} pronto para instalar`, latest: "Você tem a versão mais nova", error: `Erro: ${updStatus.message || ""}` }[updStatus.state] || "Procura sozinho ao abrir e a cada 4 h"}
+              {{ checking: "Procurando…", downloading: `Baixando o Kon ${updStatus.version || ""} · ${updStatus.percent || 0}%${updStatus.small ? " · atualização pequena" : ""}`, ready: `Kon ${updStatus.version} pronto para instalar`, latest: "Você tem a versão mais nova", error: `Erro: ${updStatus.message || ""}` }[updStatus.state] || "Procura sozinho ao abrir e a cada 4 h"}
             </div>
           </div>
           {update ? (
@@ -2186,7 +2586,10 @@ export default function KonIsland() {
           <Switch on={settings.autoUpdate !== false} onChange={(v) => saveSettings({ autoUpdate: v })} color="#10b981" />
         </div>
       )}
-      <button onClick={() => { setObStep(0); setSheetTab("welcome"); }} className="text-left text-[10.5px] text-sky-300/70 hover:text-sky-200">Rever as boas-vindas</button>
+      <div className="flex items-center gap-4">
+        <button onClick={() => { setRep({ note: "", shot: true, status: "idle", result: null }); setSheetTab("report"); }} className="text-left text-[10.5px] text-amber-300/80 hover:text-amber-200 flex items-center gap-1"><AlertTriangle size={10} /> Relatar problema</button>
+        <button onClick={() => { setObStep(0); setSheetTab("welcome"); }} className="text-left text-[10.5px] text-sky-300/70 hover:text-sky-200">Rever as boas-vindas</button>
+      </div>
       <div className="flex items-center justify-between text-[10px] text-white/35 pt-0.5">
         <span>Ctrl+Alt+Space Perguntar · Ctrl+Alt+T OCR · Ctrl+Alt+E Painel · Ctrl+Alt+V Clips</span>
         {REAL && <button onClick={() => bridge.quit()} className="flex items-center gap-1 hover:text-red-300"><Power size={10} /> Sair</button>}
@@ -2197,11 +2600,11 @@ export default function KonIsland() {
     <div className="absolute top-0 left-0 right-0 mx-auto flex flex-col p-4 pt-3" style={{ width: 440, height: 470 }}>
       <div className="flex items-start justify-between shrink-0">
         <div>
-          <div className="text-[17px] font-bold tracking-tight">{sheetTab === "welcome" ? "Bem-vindo ao Kon" : sheetTab === "pages" ? "Pages" : "Configurações"}</div>
-          <div className="text-[12px] text-white/50 mt-0.5">{sheetTab === "welcome" ? "Três passos e pronto." : sheetTab === "pages" ? "Arraste para reordenar. Desligue o que não usa." : "IA, notch, Claude Code, agenda e atualizações."}</div>
+          <div className="text-[17px] font-bold tracking-tight">{sheetTab === "welcome" ? "Bem-vindo ao Kon" : sheetTab === "report" ? "Relatar problema" : sheetTab === "pages" ? "Pages" : "Configurações"}</div>
+          <div className="text-[12px] text-white/50 mt-0.5">{sheetTab === "report" ? "Junte as informações para eu conseguir corrigir." : sheetTab === "welcome" ? "Três passos e pronto." : sheetTab === "pages" ? "Arraste para reordenar. Desligue o que não usa." : "IA, notch, Claude Code, agenda e atualizações."}</div>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <div className={`flex h-6 rounded-full bg-white/[0.08] p-[2px] text-[10.5px] font-medium ${sheetTab === "welcome" ? "hidden" : ""}`}>
+          <div className={`flex h-6 rounded-full bg-white/[0.08] p-[2px] text-[10.5px] font-medium ${sheetTab === "welcome" || sheetTab === "report" ? "hidden" : ""}`}>
             {[["pages", "Pages"], ["settings", "Ajustes"]].map(([t, l]) => (
               <button key={t} onClick={() => setSheetTab(t)} className={`relative px-2.5 rounded-full ${sheetTab === t ? "text-black" : "text-white/55"}`}>
                 {sheetTab === t && <motion.span layoutId="sheetPill" className="absolute inset-0 rounded-full bg-white" transition={SPRING} />}
@@ -2214,8 +2617,8 @@ export default function KonIsland() {
       </div>
       <div className="relative flex-1 min-h-0 mt-3 overflow-y-auto pr-0.5">
         <AnimatePresence mode="popLayout" initial={false}>
-          <motion.div key={sheetTab} {...FADE} className={sheetTab === "welcome" ? "h-full" : ""}>
-            {sheetTab === "welcome" ? Onboarding : sheetTab === "pages" ? (
+          <motion.div key={sheetTab} {...FADE} className={sheetTab === "welcome" || sheetTab === "report" ? "h-full" : ""}>
+            {sheetTab === "welcome" ? Onboarding : sheetTab === "report" ? ReportPane : sheetTab === "pages" ? (
               <Reorder.Group axis="y" values={pageOrder} onReorder={setPageOrder} className="flex flex-col gap-1">
                 {pageOrder.filter((id) => PAGE_META[id]).map((id) => <PageRow key={id} id={id} on={!!pageOn[id]} onToggle={(v) => togglePage(id, v)} />)}
               </Reorder.Group>
@@ -2228,7 +2631,7 @@ export default function KonIsland() {
 
   const contentKey = dragging ? "drop" : view === "compact" ? (action ? `act-${action.key}` : activeToast ? `toast-${activeToast.id}` : slim ? "slim" : `c-${mode}`) : view === "ocr" ? `ocr-${ocrPhase}` : view;
   const content = dragging ? DropView
-    : view === "panel" ? Panel : view === "sheet" ? SheetView : view === "ask" ? AskView : view === "translate" ? TranslateView : view === "ocr" ? OcrView
+    : view === "panel" ? Panel : view === "sheet" ? SheetView : view === "ask" ? AskView : view === "translate" ? TranslateView : view === "ocr" ? OcrView : view === "textact" ? TextActView
       : action ? ActionView : activeToast ? ToastView : renderCompact();
 
   /* Dock de testes (opcional, em Configurações) */
@@ -2244,7 +2647,10 @@ export default function KonIsland() {
     ["Câmbio", () => openAsk("100usd em brl=")],
     ["OCR", () => { if (REAL) startOcr(); else { setOcrText("TODAY:\nIced coffee latte 18K\nMatcha milk 24K"); setOcrError(""); setOcrPhase("result"); setView("ocr"); } }],
     ["Pages", () => openSheet("pages")],
-    ["Permissão", () => setPerms((l) => [...l, { id: uid(), tool: "Bash", input: { command: "npm run build && npm test" }, cwd: "C:/Projetos/kon-notch", at: Date.now() }])],
+    ["Permissão", () => setPerms((l) => [...l, l.length % 2
+      ? { id: uid(), tool: "Bash", input: { command: "npm run build && npm test" }, cwd: "C:/Projetos/kon-notch", at: Date.now() }
+      : { id: uid(), tool: "Edit", input: { file_path: "C:/Projetos/kon-notch/src/orcamento.ts", old_string: "const bdi = 0.25;\nconst total = custo * (1 + bdi);", new_string: "const bdi = calcularBdi(obra);\nconst total = arredondar(custo * (1 + bdi), 2);\nlog(total);" }, cwd: "C:/Projetos/kon-notch", at: Date.now() }])],
+    ["Texto", () => { setTa({ text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa", status: "idle", action: "", result: "", error: "" }); setView("textact"); }],
     ["Reunião", () => { const t = Date.now() + 90e3; setCalEvents([{ id: "demo|" + t, title: "Daily com o time", start: t, end: t + 30 * 60e3, allDay: false, link: "https://meet.google.com/abc-defg-hij" }]); }],
     ["Uso 84%", () => setUsage((u) => u && ({ ...u, window: { ...(u.window || {}), pct: u.window?.pct === 84 ? 73 : 84, resetsAt: Date.now() + 38 * 60e3 } }))],
     ["Maximizado", () => setFg((f) => ({ ...f, max: !f.max }))],
@@ -2280,16 +2686,16 @@ export default function KonIsland() {
           >
             {/* Brilho do estado (âmbar / verde / roxo) vindo da base */}
             <motion.div className="pointer-events-none absolute inset-0 z-0" initial={false}
-              animate={{ opacity: tone ? 1 : 0 }} transition={{ duration: 0.5 }}
+              animate={{ opacity: tone ? Math.min(1, 0.4 + 0.6 * glowK) : 0 }} transition={{ duration: 0.5 }}
               style={{ background: `radial-gradient(120% 90% at 30% 115%, ${TONE_COLOR[tone] || "transparent"} 0%, transparent 62%)` }} />
             {/* Aurora: linha neon ultrafina na base */}
             <motion.div className="pointer-events-none absolute inset-x-0 bottom-0 z-0" initial={false}
-              animate={processing ? { opacity: [0.6, 1, 0.6] } : { opacity: 0.55 }}
+              animate={processing ? { opacity: [0.6 * glowK, glowK, 0.6 * glowK] } : { opacity: 0.55 * glowK }}
               transition={processing ? { duration: 1.2, repeat: Infinity, ease: "easeInOut" } : { duration: 0.5 }}>
               <motion.div className="absolute left-[10%] right-[10%] bottom-0 rounded-full blur-xl" animate={{ height: processing ? 18 : 8, opacity: processing ? 0.6 : 0.3 }} transition={SPRING}
-                style={{ background: "linear-gradient(90deg,#06b6d4,#2563eb,#4f46e5,#9333ea)" }} />
+                style={{ background: `linear-gradient(90deg,${accentStops.join(",")})` }} />
               <motion.div className="absolute bottom-0 h-[1.5px]" animate={{ left: processing ? "6%" : "22%", right: processing ? "6%" : "22%" }} transition={SPRING}
-                style={{ background: "linear-gradient(90deg,transparent,#22d3ee,#6366f1,#a855f7,transparent)" }} />
+                style={{ background: `linear-gradient(90deg,transparent,${accentStops.slice(0, 3).join(",")},transparent)` }} />
             </motion.div>
             <div className="relative z-10 w-full h-full">
               <AnimatePresence mode="popLayout" initial={false}>

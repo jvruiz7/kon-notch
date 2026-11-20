@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 const CHANNELS = [
   "shortcut", "win:blurred", "media:state", "volume:state", "claude:event", "helper:ready",
   "ocr:started", "ocr:result", "ai:event", "toast", "fg:state", "privacy:state", "claude:perm-closed",
-  "clip:changed", "update:ready", "update:status",
+  "clip:changed", "update:ready", "update:status", "reminder:due", "reminders:changed", "textact:open", "wake:state",
 ];
 
 contextBridge.exposeInMainWorld("kon", {
@@ -55,6 +55,24 @@ contextBridge.exposeInMainWorld("kon", {
   updateInfo: () => ipcRenderer.invoke("update:get"),
   updateCheck: () => ipcRenderer.invoke("update:check"),
   updateInstall: () => ipcRenderer.send("update:install"),
+  wakeGet: () => ipcRenderer.invoke("wake:get"),
+  report: (opts) => ipcRenderer.invoke("report:make", opts),
+  reportReveal: (p) => ipcRenderer.send("report:reveal", p),
+  sysInfo: (withProcs) => ipcRenderer.invoke("sys:get", !!withProcs),
+  focusDnd: (on) => ipcRenderer.invoke("focus:dnd", !!on),
+  quickPick: (kind) => ipcRenderer.invoke("quick:pick", kind),
+  quickRun: (it) => ipcRenderer.invoke("quick:run", it),
+  mixGet: () => ipcRenderer.invoke("mix:get"),
+  mixSetDevice: (id) => ipcRenderer.invoke("mix:setdev", id),
+  mixAppVolume: (pids, volume) => ipcRenderer.invoke("mix:appvol", { pids, volume }),
+  mixAppMute: (pids, mute) => ipcRenderer.invoke("mix:appmute", { pids, mute }),
+  textPaste: (text) => ipcRenderer.invoke("textact:paste", text),
+  captureScreen: () => ipcRenderer.invoke("screen:capture"),
+  remList: () => ipcRenderer.invoke("rem:list"),
+  remAdd: (r) => ipcRenderer.invoke("rem:add", r),
+  remRemove: (id) => ipcRenderer.invoke("rem:remove", id),
+  remSnooze: (id, minutes) => ipcRenderer.invoke("rem:snooze", { id, minutes }),
+  remAck: () => ipcRenderer.send("rem:ack"),
   copy: (text) => ipcRenderer.invoke("clipboard:write", text),
   openExternal: (url) => ipcRenderer.send("open:external", url),
   on: (channel, cb) => {

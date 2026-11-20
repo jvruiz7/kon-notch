@@ -1,5 +1,5 @@
 import React from "react";
-import { Asterisk, Music2, Timer, GlassWater, CloudSun, ListTodo, LayoutGrid, FolderOpen, ClipboardList } from "lucide-react";
+import { Asterisk, Music2, Timer, GlassWater, CloudSun, ListTodo, LayoutGrid, FolderOpen, ClipboardList, Zap, Cpu } from "lucide-react";
 
 /* Física & constantes */
 export const SPRING = { type: "spring", stiffness: 380, damping: 30, mass: 0.8 };
@@ -25,9 +25,11 @@ export const PAGE_META = {
   weather: { label: "Clima", nav: "CLIMA", Icon: CloudSun, sq: "bg-sky-500" },
   todo: { label: "To-do", nav: "TO-DO", Icon: ListTodo, sq: "bg-lime-500" },
   claude: { label: "Claude Code", nav: "CLAUDE", Icon: Asterisk, sq: "bg-purple-500" },
+  quick: { label: "Atalhos", nav: "ATALHOS", Icon: Zap, sq: "bg-yellow-400" },
+  system: { label: "Sistema", nav: "SISTEMA", Icon: Cpu, sq: "bg-slate-400" },
   water: { label: "Water", nav: "WATER", Icon: GlassWater, sq: "bg-sky-400" },
 };
-export const DEFAULT_ORDER = ["home", "files", "clip", "music", "weather", "focus", "todo", "claude", "water"];
+export const DEFAULT_ORDER = ["home", "files", "clip", "music", "weather", "focus", "todo", "claude", "quick", "system", "water"];
 
 export const DURATION = 195;
 export const CLAUDE_STEP = 3;
@@ -213,3 +215,13 @@ export function translateLocal(text, src, tgt) {
   });
   return matched ? out.join(" ") : null;
 }
+
+/* Cores de destaque (linha aurora e brilhos) */
+export const ACCENTS = {
+  aurora: { label: "Aurora", stops: ["#06b6d4", "#2563eb", "#4f46e5", "#9333ea"] },
+  laranja: { label: "Laranja", stops: ["#f59e0b", "#f97316", "#ea580c", "#dc2626"] },
+  verde: { label: "Verde", stops: ["#22c55e", "#10b981", "#14b8a6", "#06b6d4"] },
+  rosa: { label: "Rosa", stops: ["#f472b6", "#ec4899", "#d946ef", "#a855f7"] },
+  azul: { label: "Azul", stops: ["#38bdf8", "#3b82f6", "#2563eb", "#1d4ed8"] },
+  branco: { label: "Branco", stops: ["#e5e5e5", "#ffffff", "#d4d4d4", "#a3a3a3"] },
+};
