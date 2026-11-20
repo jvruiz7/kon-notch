@@ -272,6 +272,8 @@ export default function KonIsland() {
   const voiceFallback = useRef(false);
   const viewRef = useRef(view); viewRef.current = view;
   const tabRef = useRef(tab); tabRef.current = tab;
+  const leaveTimer = useRef(null);
+  const addingRef = useRef(false); addingRef.current = adding;
   const islandBoxRef = useRef(null);
 
   const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.current.push(id); return id; };
@@ -607,7 +609,8 @@ export default function KonIsland() {
 
   /* ─── Ações ─── */
   const toCompact = () => { clearTimers(); setView("compact"); };
-  const togglePlay = () => { if (REAL) return bridge.mediaCmd("toggle"); if (dPos >= DURATION) setDPos(0); setDPlaying((p) => !p); };
+  // resposta imediata no botão; o estado real do Windows chega em seguida e confirma
+  const togglePlay = () => { if (REAL) { setMedia((m) => (m.active ? { ...m, status: m.status === 4 ? 5 : 4, position: pos, updated: Date.now() } : m)); return bridge.mediaCmd("toggle"); } if (dPos >= DURATION) setDPos(0); setDPlaying((p) => !p); };
   const startTimer = () => { if (remaining <= 0) setRemaining(timerTotal); setTimerRunning(true); };
   const toggleTimer = () => (timerRunning ? setTimerRunning(false) : startTimer());
   const stopTimer = () => { setTimerRunning(false); setTimerTotal(1500); setRemaining(1500); };
@@ -809,6 +812,7 @@ export default function KonIsland() {
   /* ─── Hover ─── */
   /* Abrir de propósito: passar o mouse (rápido), passar o mouse com atraso, ou só com clique */
   const onEnter = () => {
+    clearTimeout(leaveTimer.current); // voltou antes de fechar: mantém aberto
     if (view !== "compact" || locked || dragging) return;
     clearTimeout(hoverTimer.current);
     setHover(true);
@@ -821,10 +825,12 @@ export default function KonIsland() {
     setHover(false);
     openPanel();
   };
+  // fecha com uma pequena folga: passar rápido pela borda ou o painel mudar de tamanho não fecha nada
   const onLeave = () => {
     clearTimeout(hoverTimer.current);
     setHover(false);
-    if (view === "panel" && !adding) setView("compact");
+    clearTimeout(leaveTimer.current);
+    leaveTimer.current = setTimeout(() => { if (viewRef.current === "panel" && !addingRef.current) setView("compact"); }, 280);
   };
 
   /* ─── Detecção inline (math 0 ms / câmbio com cache) ─── */
@@ -894,11 +900,13 @@ export default function KonIsland() {
 
   /* Regiões clicáveis para o click-through dinâmico (o main consulta o cursor do sistema) */
   useEffect(() => {
-    const rw = (w + 36) * nScale;
-    const rects = [{ x: (WIN_W - rw) / 2, y: 0, w: rw, h: (islandTop + h) * nScale + (slim ? 14 : 10) }];
+    // margem pequena no notch fechado (não engole cliques nas abas do navegador ao lado); maior com o painel aberto
+    const mx = view === "compact" && !dragging ? 8 : 18;
+    const rw = (w + mx * 2) * nScale;
+    const rects = [{ x: (WIN_W - rw) / 2, y: 0, w: rw, h: (islandTop + h) * nScale + (slim ? 12 : view === "compact" ? 6 : 10) }];
     if (settings.devDock) rects.push({ x: 10, y: 560 - 100, w: WIN_W - 20, h: 96 });
     bridge.setHitRects(rects);
-  }, [w, h, islandTop, settings.devDock, nScale, slim]);
+  }, [w, h, islandTop, settings.devDock, nScale, slim, view, dragging]);
   useEffect(() => {
     bridge.pin(["ask", "translate", "ocr", "sheet"].includes(view) || adding);
   }, [view, adding]);

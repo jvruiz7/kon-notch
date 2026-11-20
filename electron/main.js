@@ -175,7 +175,7 @@ function createWindow() {
   win.setIgnoreMouseEvents(true, { forward: true });
   win.setContentProtection(readSettings().hideInCapture !== false); // fica fora de prints e de compartilhamento de tela
   load(win);
-  win.once("ready-to-show", () => win.showInactive());
+  win.once("ready-to-show", () => { win.showInactive(); setKonFocusable(pinned); });
   win.on("blur", () => send("win:blurred"));
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e) => e.preventDefault()); // soltar arquivo fora da drop zone não navega
@@ -206,8 +206,12 @@ function hitTestLoop() {
   }, 40);
 }
 ipcMain.on("hit:rects", (_e, rects) => { hitRects = Array.isArray(rects) ? rects : []; });
-ipcMain.on("win:pin", (_e, on) => { pinned = !!on; if (pinned) setInteractive(true); });
-ipcMain.on("win:focus", () => { win?.show(); win?.focus(); });
+// O Kon só pega o foco do teclado quando você vai digitar (Perguntar, Ajustes, OCR, nova tarefa).
+// Clicar nos botões do notch não rouba o foco da janela em que você estava trabalhando.
+function setKonFocusable(on) { try { if (win && !win.isDestroyed()) win.setFocusable(!!on); } catch {} }
+ipcMain.on("win:pin", (_e, on) => { pinned = !!on; setKonFocusable(pinned); if (pinned) setInteractive(true); else applyFullscreen(); });
+function focusKon() { setKonFocusable(true); win?.show(); win?.focus(); }
+ipcMain.on("win:focus", () => focusKon());
 ipcMain.on("win:blur", () => win?.blur());
 
 /* ═════════ Smart OCR: overlay fullscreen transparente + Windows.Media.Ocr ═════════ */
@@ -268,7 +272,7 @@ ipcMain.on("ocr:region", async (_e, r) => {
   } finally {
     fs.unlink(file, () => {});
   }
-  win?.show(); win?.focus();
+  focusKon();
 });
 function runOcr(file) {
   return new Promise((resolve, reject) => {
@@ -741,7 +745,7 @@ ipcMain.on("app:quit", () => app.quit());
 
 function registerShortcuts() {
   const ok = [
-    globalShortcut.register("Control+Alt+Space", () => { win?.show(); win?.focus(); send("shortcut", "ask"); }),
+    globalShortcut.register("Control+Alt+Space", () => { focusKon(); send("shortcut", "ask"); }),
     globalShortcut.register("Control+Alt+T", () => startOcr()),
     globalShortcut.register("Control+Alt+E", () => send("shortcut", "panel")),
     globalShortcut.register("Control+Alt+V", () => { win?.show(); send("shortcut", "clip"); }),
@@ -753,11 +757,11 @@ function createTray() {
   tray.setToolTip("Kon");
   const s = readSettings();
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "Perguntar ao Kon      Ctrl+Alt+Space", click: () => { win?.show(); win?.focus(); send("shortcut", "ask"); } },
+    { label: "Perguntar ao Kon      Ctrl+Alt+Space", click: () => { focusKon(); send("shortcut", "ask"); } },
     { label: "Smart OCR             Ctrl+Alt+T", click: () => startOcr() },
     { label: "Abrir painel          Ctrl+Alt+E", click: () => send("shortcut", "panel") },
     { label: "Área de transferência  Ctrl+Alt+V", click: () => send("shortcut", "clip") },
-    { label: "Configurações", click: () => { win?.show(); win?.focus(); send("shortcut", "settings"); } },
+    { label: "Configurações", click: () => { focusKon(); send("shortcut", "settings"); } },
     { type: "separator" },
     { label: "Iniciar com o Windows", type: "checkbox", checked: !!s.autoStart, click: (i) => writeSettings({ autoStart: i.checked }) },
     { label: "Recarregar", click: () => win?.reload() },

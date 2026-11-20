@@ -12,8 +12,9 @@ export const FADE = {
 export const AURORA = "linear-gradient(90deg,#06b6d4,#2563eb,#4f46e5,#9333ea)";
 
 export const COMPACT = { idle: [168, 32], music: [250, 36], volume: [300, 36], timer: [280, 36], claude: [300, 36], usage: [300, 36], meeting: [320, 36], slim: [130, 5] };
-export const PANEL_SIZE = { weather: [600, 255], todo: [660, 255], claude: [620, 285], clip: [600, 265] };
-export const PANEL_DEFAULT = [580, 255];
+// Todas as páginas têm o mesmo tamanho: assim a barra de baixo nunca sai de baixo do cursor ao trocar de página
+export const PANEL_SIZE = {};
+export const PANEL_DEFAULT = [660, 278];
 
 export const PAGE_META = {
   home: { label: "Home", nav: "HOME", Icon: LayoutGrid, sq: "bg-orange-500" },

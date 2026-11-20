@@ -287,14 +287,23 @@ $pending = $stdin.ReadLineAsync()
 $lastVol = ''
 $script:tick = 0
 while ($true) {
-  if ($pending.IsCompleted) {
+  # processa todos os comandos que chegaram (antes era 1 por volta de 250 ms e os cliques formavam fila)
+  $closed = $false
+  $batch = New-Object System.Collections.Generic.List[object]
+  while ($pending.IsCompleted) {
     $line = $null
-    try { $line = $pending.Result } catch { break }
-    if ($null -eq $line) { break } # o processo pai fechou o stdin
-    if ($line.Trim()) {
-      try { Invoke-Cmd ($line | ConvertFrom-Json) } catch { Emit @{ type = 'error'; scope = 'cmd'; message = $_.Exception.Message } }
-    }
+    try { $line = $pending.Result } catch { $closed = $true; break }
+    if ($null -eq $line) { $closed = $true; break } # o processo pai fechou o stdin
+    if ($line.Trim()) { try { $batch.Add(($line | ConvertFrom-Json)) } catch {} }
     $pending = $stdin.ReadLineAsync()
+  }
+  if ($closed) { break }
+  # cliques repetidos de play/pause se anulam: só o resultado final importa
+  $toggles = @($batch | Where-Object { $_.cmd -eq 'toggle' }).Count
+  $didToggle = $false
+  foreach ($c in $batch) {
+    if ($c.cmd -eq 'toggle') { if ($didToggle -or ($toggles % 2 -eq 0)) { continue }; $didToggle = $true }
+    try { Invoke-Cmd $c } catch { Emit @{ type = 'error'; scope = 'cmd'; message = $_.Exception.Message } }
   }
   if ($volOk) {
     try {
