@@ -38,7 +38,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }, sel);
   const state = () => page.evaluate(() => {
     const t = document.body.innerText;
-    return { sheet: /Configurações|Arraste para reordenar/.test(t), panel: !!([...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações")), tab: (() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações"); if (!g) return ""; const nav = [...g.parentElement.parentElement.querySelectorAll("button")]; return (nav.find((b) => !b.title && b.innerText.trim().length > 2)?.innerText || "").trim(); })(), sheetTitle: (document.querySelector("h2,h3")?.innerText || "") };
+    return { sheet: /Configurações|Arraste para reordenar/.test(t), panel: !!([...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages")), tab: (() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages"); if (!g) return ""; const nav = [...g.parentElement.parentElement.querySelectorAll("button")]; return (nav.find((b) => !b.title && b.innerText.trim().length > 2)?.innerText || "").trim(); })(), sheetTitle: (document.querySelector("h2,h3")?.innerText || "") };
   });
   const cx = win.x + win.w / 2;
   await shot("inicio");
@@ -49,11 +49,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   if (!(await state()).panel) { log("  (hover não abriu; clicando no notch)"); await click(cx, win.y + 14); await sleep(700); log("  ", JSON.stringify(await state())); }
 
   log("2) clica em cada página da barra");
-  const navCount = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")] : []; return window.__nav.length; });
+  const navCount = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")] : []; return window.__nav.length; });
   log("botões na barra:", navCount);
   for (let i = 0; i < navCount; i++) {
     const r = await page.evaluate((i) => { const b = window.__nav[i]; if (!b || !b.offsetParent) return null; const q = b.getBoundingClientRect(); return { x: q.x, y: q.y, w: q.width, h: q.height, t: b.title || b.innerText.trim() }; }, i);
-    if (!r || /Pages e configurações|Perguntar/.test(r.t)) continue;
+    if (!r || /Ajustes e Pages|Perguntar/.test(r.t)) continue;
     const before = JSON.stringify(await state()); const p = S(r); const t0 = Date.now();
     await click(p.x, p.y);
     let after = before; while (Date.now() - t0 < 1500) { after = JSON.stringify(await state()); if (after !== before) break; await sleep(30); }
@@ -63,8 +63,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await shot("paginas");
 
   log("3) abre Ajustes pela engrenagem");
-  let r = await rectOf({ title: "Pages e configurações" });
-  if (!r) { await move(cx, win.y + 14); await sleep(700); r = await rectOf({ title: "Pages e configurações" }); }
+  let r = await rectOf({ title: "Ajustes e Pages" });
+  if (!r) { await move(cx, win.y + 14); await sleep(700); r = await rectOf({ title: "Ajustes e Pages" }); }
   log("engrenagem", JSON.stringify(r));
   if (r) { const p = S(r); await click(p.x, p.y); }
   for (const ms of [150, 400, 900, 1600]) { await sleep(ms === 150 ? 150 : ms - 150); log(`  +${ms} ms`, JSON.stringify(await state()), "fg:", await fg()); }
@@ -88,14 +88,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await glide(cx, win.y + 14); await sleep(800); log("  hover de novo", JSON.stringify(await state())); await shot("hover2");
 
   log("5) cliques rápidos alternando páginas (40 cliques)");
-  const ids = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Pages e configurações"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")].filter((b) => b.offsetParent && !b.title) : []; return window.__nav.length; });
+  const ids = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")].filter((b) => b.offsetParent && !b.title) : []; return window.__nav.length; });
   const rects = await page.evaluate(() => window.__nav.map((b) => { const q = b.getBoundingClientRect(); return { x: q.x, y: q.y, w: q.width, h: q.height }; }));
   const t0 = Date.now();
   for (let k = 0; k < 40 && rects.length; k++) { const p = S(rects[k % rects.length]); await click(p.x, p.y); await sleep(70); }
   log(`  40 cliques em ${Date.now() - t0} ms`, JSON.stringify(await state()));
   await sleep(800); await shot("rapidos"); log("  depois", JSON.stringify(await state()));
   // ainda responde?
-  r = await rectOf({ title: "Pages e configurações" });
+  r = await rectOf({ title: "Ajustes e Pages" });
   if (r) { const p = S(r); await click(p.x, p.y); await sleep(800); log("  engrenagem depois dos cliques rápidos", JSON.stringify(await state())); await shot("ajustes-depois"); }
 
   log("6) abre Ajustes pelo atalho do menu da bandeja não dá; testa Ctrl+Alt+Espaço (Perguntar)");
