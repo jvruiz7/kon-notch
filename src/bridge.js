@@ -21,7 +21,7 @@ const pub = () => { const s = { ...DEFAULTS, ...read() }; return { ...s, hasGemi
 
 const webBridge = {
   desktop: false,
-  setHitRects: () => {}, pin: () => {}, focus: () => {}, blur: () => {}, quit: () => {},
+  setHitRects: () => {}, diag: () => {}, cursor: () => {}, pin: () => {}, focus: () => {}, blur: () => {}, quit: () => {},
   getSettings: async () => pub(),
   setSettings: async (patch) => { write({ ...read(), ...patch }); return pub(); },
   setKey: async () => pub(),

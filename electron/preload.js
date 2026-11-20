@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld("kon", {
   pin: (on) => ipcRenderer.send("win:pin", !!on),
   focus: () => ipcRenderer.send("win:focus"),
   blur: () => ipcRenderer.send("win:blur"),
+  cursor: (x, y) => ipcRenderer.send("hit:cursor", x == null ? null : [x, y]),
+  diag: (e) => ipcRenderer.send("diag", e), // diagnóstico de cliques (vai só para o relatório de problemas)
   quit: () => ipcRenderer.send("app:quit"),
   // configurações e chaves (as chaves nunca voltam para o renderer)
   getSettings: () => ipcRenderer.invoke("settings:get"),

@@ -101,6 +101,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   log("6) abre Ajustes pelo atalho do menu da bandeja não dá; testa Ctrl+Alt+Espaço (Perguntar)");
   await click(cx + 500, 700); await sleep(500);
   await run(`[System.Windows.Forms.SendKeys]::SendWait("^%( )")`); await sleep(900); log("  ", JSON.stringify(await state()), "foco:", await page.evaluate(() => document.activeElement?.tagName), "fg:", await fg()); await shot("perguntar");
+  log("7) gera um relatório de problemas (deve trazer cliques.json e nenhuma chave)");
+  log("  ", JSON.stringify(await page.evaluate(() => window.kon.report({ note: "sonda", withShot: false }).then((r) => ({ ok: r?.ok, err: r?.error })))));
   log("FIM");
   await browser.close().catch(() => {});
   ps.stdin.end(); process.exit(0);

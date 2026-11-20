@@ -963,9 +963,30 @@ export default function KonIsland() {
     return () => { window.removeEventListener("keydown", onKey); document.removeEventListener("mousedown", onDown); };
   });
 
+  /* ─── Diagnóstico de cliques (vai só para o relatório de problemas; sem textos da tela) ─── */
+  useEffect(() => { bridge.diag?.({ e: "view", v: view, tab }); }, [view, tab]);
+  useEffect(() => {
+    let lastMove = 0;
+    const label = (el) => { const b = el?.closest?.("button,a,input,select,textarea,[role=button]"); if (!b) return el?.tagName?.toLowerCase() || "?"; return (b.title || b.getAttribute("aria-label") || b.tagName.toLowerCase() + (b.type ? ":" + b.type : "")).slice(0, 40); };
+    const down = (e) => bridge.diag?.({ e: "clique", x: Math.round(e.clientX), y: Math.round(e.clientY), alvo: label(e.target), botao: e.button });
+    // a posição do cursor vista pela própria página é a referência do click-through (imune a escala/vários monitores)
+    let raf = 0, px = 0, py = 0;
+    const move = (e) => {
+      px = e.clientX; py = e.clientY;
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; bridge.cursor?.(px, py); });
+      const n = performance.now(); if (n - lastMove < 400) return; lastMove = n; bridge.diag?.({ e: "mouse", x: Math.round(e.clientX), y: Math.round(e.clientY) });
+    };
+    const out = (e) => { if (!e.relatedTarget) bridge.cursor?.(null); }; // saiu da janela: o main volta a usar o cursor do sistema
+    document.addEventListener("pointerdown", down, true);
+    document.addEventListener("mousemove", move, true);
+    document.addEventListener("mouseout", out, true);
+    return () => { document.removeEventListener("pointerdown", down, true); document.removeEventListener("mousemove", move, true); document.removeEventListener("mouseout", out, true); cancelAnimationFrame(raf); };
+  }, []);
+
   /* ─── Hover ─── */
   /* Abrir de propósito: passar o mouse (rápido), passar o mouse com atraso, ou só com clique */
   const onEnter = () => {
+    bridge.diag?.({ e: "entrou" });
     clearTimeout(leaveTimer.current); // voltou antes de fechar: mantém aberto
     if (view !== "compact" || locked || dragging) return;
     clearTimeout(hoverTimer.current);
@@ -981,6 +1002,7 @@ export default function KonIsland() {
   };
   // fecha com uma pequena folga: passar rápido pela borda ou o painel mudar de tamanho não fecha nada
   const onLeave = () => {
+    bridge.diag?.({ e: "saiu" });
     clearTimeout(hoverTimer.current);
     setHover(false);
     clearTimeout(leaveTimer.current);
@@ -2003,7 +2025,7 @@ export default function KonIsland() {
           {visiblePages.map((id) => navButton({ id, ...PAGE_META[id] }))}
           <span className="w-px h-4 bg-white/10 mx-1" />
           {UTIL.map(navButton)}
-          <button onClick={() => openSheet("pages")} title="Pages e configurações" className="w-7 h-7 grid place-items-center rounded-full transition-colors text-white/40 hover:text-white/80"><Settings size={13} /></button>
+          <button onClick={() => openSheet("settings")} title="Ajustes e Pages" className="w-7 h-7 grid place-items-center rounded-full transition-colors text-white/40 hover:text-white/80"><Settings size={13} /></button>
         </div>
         <div className="flex items-center gap-1.5">
           <motion.span className={`w-1.5 h-1.5 rounded-full ${playing ? "bg-emerald-400" : timerRunning ? "bg-purple-400" : "bg-white/25"}`}
@@ -2652,7 +2674,7 @@ export default function KonIsland() {
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <div className={`flex h-6 rounded-full bg-white/[0.08] p-[2px] text-[10.5px] font-medium ${sheetTab === "welcome" || sheetTab === "report" ? "hidden" : ""}`}>
-            {[["pages", "Pages"], ["settings", "Ajustes"]].map(([t, l]) => (
+            {[["settings", "Ajustes"], ["pages", "Pages"]].map(([t, l]) => (
               <button key={t} onClick={() => setSheetTab(t)} className={`relative px-2.5 rounded-full ${sheetTab === t ? "text-black" : "text-white/55"}`}>
                 {sheetTab === t && <motion.span layoutId="sheetPill" className="absolute inset-0 rounded-full bg-white" transition={SPRING} />}
                 <span className="relative">{l}</span>

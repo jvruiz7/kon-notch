@@ -33,6 +33,9 @@ let shot = null;
 let helper = null;
 let helperRestarts = 0;
 let hitRects = [];        // regiões clicáveis (coordenadas da janela, CSS px)
+// Diagnóstico de cliques: últimos eventos de janela/cursor/cliques, só para o relatório de problemas (nada sai do PC).
+const diagLog = [];
+function diag(e, extra = {}) { diagLog.push({ t: Date.now(), e, ...extra }); if (diagLog.length > 400) diagLog.splice(0, diagLog.length - 400); }
 let interactive = false;
 let pinned = false;       // força a janela a aceitar mouse (ex.: digitando no Ask)
 let fgState = { full: false, max: false };
@@ -234,7 +237,8 @@ function createWindow() {
   win.setContentProtection(readSettings().hideInCapture !== false); // fica fora de prints e de compartilhamento de tela
   load(win);
   win.once("ready-to-show", () => { win.showInactive(); setKonFocusable(pinned); });
-  win.on("blur", () => send("win:blurred"));
+  win.on("blur", () => { diag("janela:blur"); send("win:blurred"); });
+  win.on("focus", () => diag("janela:focus"));
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: "deny" }; });
   win.webContents.on("will-navigate", (e) => e.preventDefault()); // soltar arquivo fora da drop zone não navega
 }
@@ -245,8 +249,28 @@ function setInteractive(on) {
   if (!win || on === interactive) return;
   interactive = on;
   win.setIgnoreMouseEvents(!on, { forward: true });
+  try { const p = screen.getCursorScreenPoint(), b = win.getBounds(); diag("interativo", { on, cursor: [p.x, p.y], janela: [b.x, b.y, b.width, b.height], rel: [p.x - b.x, p.y - b.y], pinned }); } catch {}
 }
 let followTick = 0;
+// Posição do cursor informada pela página (coordenadas da própria janela): é a fonte preferida, porque não
+// depende de converter coordenadas de tela (escala 125%, monitores com escalas diferentes).
+// O cálculo pelo cursor do sistema fica de reserva (arrastar do Explorer, página sem eventos de mouse).
+let pageCursor = null; // { x, y, at } | null
+let lastMismatchLog = 0;
+const insideRects = (x, y) => hitRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
+function systemRel() { const p = screen.getCursorScreenPoint(); const b = win.getBounds(); return { x: p.x - b.x, y: p.y - b.y }; }
+function hitTick() {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  if (pinned) return setInteractive(true);
+  if (pageCursor) {
+    // vale enquanto o cursor do sistema não se mexeu desde o último aviso da página (parado em cima de um botão)
+    const p = screen.getCursorScreenPoint();
+    const still = p.x === pageCursor.sys.x && p.y === pageCursor.sys.y;
+    if (still || Date.now() - pageCursor.at < 120) return setInteractive(insideRects(pageCursor.x, pageCursor.y));
+  }
+  const s = systemRel();
+  setInteractive(insideRects(s.x, s.y));
+}
 function hitTestLoop() {
   setInterval(() => {
     // modo "seguir o cursor": troca de monitor quando o mouse muda de tela (só com o notch fechado)
@@ -254,21 +278,28 @@ function hitTestLoop() {
       const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
       if (d.id !== curDisplayId) placeWindow(d);
     }
-    if (!win || win.isDestroyed() || !win.isVisible()) return;
-    if (pinned) return setInteractive(true);
-    const p = screen.getCursorScreenPoint();
-    const b = win.getBounds();
-    const x = p.x - b.x, y = p.y - b.y;
-    const inside = hitRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
-    setInteractive(inside);
+    hitTick();
   }, 40);
 }
-ipcMain.on("hit:rects", (_e, rects) => { hitRects = Array.isArray(rects) ? rects : []; });
+ipcMain.on("hit:cursor", (_e, pt) => {
+  const now = Date.now();
+  // saiu da janela (ou o Windows mandou um "mouse leave" ao trocar o click-through): não é prova de nada,
+  // então só descarta a posição da página e deixa o cursor do sistema decidir
+  if (!Array.isArray(pt)) { pageCursor = null; return; }
+  pageCursor = { x: +pt[0], y: +pt[1], at: now, sys: screen.getCursorScreenPoint() };
+  // registra quando o cálculo pelo cursor do sistema discorda da página (indica problema de escala/monitor)
+  if (now - lastMismatchLog > 5000 && win && !win.isDestroyed()) {
+    try { const s = systemRel(); if (Math.abs(s.x - pageCursor.x) > 6 || Math.abs(s.y - pageCursor.y) > 6) { lastMismatchLog = now; diag("desalinho", { pagina: [Math.round(pageCursor.x), Math.round(pageCursor.y)], sistema: [Math.round(s.x), Math.round(s.y)] }); } } catch {}
+  }
+  hitTick(); // responde na hora, sem esperar o próximo ciclo de 40 ms
+});
+ipcMain.on("hit:rects", (_e, rects) => { hitRects = Array.isArray(rects) ? rects : []; diag("regioes", { r: hitRects.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)]) }); });
+ipcMain.on("diag", (_e, ev) => { if (ev && typeof ev === "object") { const { e, ...rest } = ev; diag("ui:" + String(e || "?").slice(0, 30), rest); } });
 // O Kon só pega o foco do teclado quando você vai digitar (Perguntar, Ajustes, OCR, nova tarefa).
 // Clicar nos botões do notch não rouba o foco da janela em que você estava trabalhando.
 function setKonFocusable(on) { try { if (win && !win.isDestroyed()) win.setFocusable(!!on); } catch {} }
-ipcMain.on("win:pin", (_e, on) => { pinned = !!on; setKonFocusable(pinned); if (pinned) setInteractive(true); else applyFullscreen(); });
-function focusKon() { setKonFocusable(true); win?.show(); win?.focus(); }
+ipcMain.on("win:pin", (_e, on) => { pinned = !!on; diag("pin", { on: pinned }); setKonFocusable(pinned); if (pinned) setInteractive(true); else applyFullscreen(); });
+function focusKon() { diag("foco:pedido"); setKonFocusable(true); win?.show(); win?.focus(); }
 ipcMain.on("win:focus", () => focusKon());
 ipcMain.on("win:blur", () => win?.blur());
 
@@ -836,10 +867,14 @@ ipcMain.handle("report:make", async (_e, { note = "", withShot = false } = {}) =
       versao: app.getVersion(), electron: process.versions.electron, windows: os.release(), arquitetura: process.arch,
       memoriaGB: +(os.totalmem() / 1024 ** 3).toFixed(1), helper: !!helper, telaCheia: fgState, atualizacao: updateStatus,
       claudeHooks: (() => { try { return hooksState(readClaudeSettings()); } catch { return null; } })(),
-      telas: screen.getAllDisplays().map((d) => ({ w: d.bounds.width, h: d.bounds.height, escala: d.scaleFactor })),
+      telas: screen.getAllDisplays().map((d) => ({ x: d.bounds.x, y: d.bounds.y, w: d.bounds.width, h: d.bounds.height, escala: d.scaleFactor, principal: d.id === screen.getPrimaryDisplay().id, kon: d.id === curDisplayId })),
+      janela: (() => { try { return win.getBounds(); } catch { return null; } })(),
       ajustes: pub, nota: String(note).slice(0, 2000),
     };
     fs.writeFileSync(path.join(dir, "info.json"), JSON.stringify(info, null, 2));
+    // linha do tempo dos últimos cliques/foco (horário relativo, sem conteúdo)
+    const t0 = diagLog.length ? diagLog[0].t : Date.now();
+    fs.writeFileSync(path.join(dir, "cliques.json"), JSON.stringify(diagLog.map((d) => ({ ...d, t: +((d.t - t0) / 1000).toFixed(3) })), null, 0).replace(/\},\{/g, "},\n{"));
     for (const f of ["kon-error.log", "kon-update.log", "kon-helper.log"]) { const t = tail(userFile(f), 400); if (t) fs.writeFileSync(path.join(dir, f), t); }
     if (withShot) {
       try {
