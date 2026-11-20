@@ -1,0 +1,76 @@
+{
+  "name": "kon",
+  "productName": "Kon",
+  "version": "1.2.0",
+  "description": "Kon — Dynamic Island / notch para Windows: Gemini + Claude, Smart OCR nativo, gaveta de arquivos, mídia, câmbio, clima.",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron \"vite\" \"wait-on tcp:5173 && cross-env KON_DEV=1 electron .\"",
+    "web": "vite",
+    "build": "vite build",
+    "start": "vite build && electron .",
+    "dist": "vite build && electron-builder --win",
+    "typecheck": "tsc --noEmit -p .",
+    "installer": "sh scripts/installer.sh"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^6.3.0",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^10.0.7",
+    "cross-env": "^10.1.0",
+    "electron": "^45.3.4",
+    "electron-builder": "^26.18.0",
+    "framer-motion": "^11.0.8",
+    "lucide-react": "^0.383.0",
+    "postcss": "^8.4.47",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.14",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.8",
+    "wait-on": "^9.5.1"
+  },
+  "build": {
+    "appId": "app.kon.desktop",
+    "productName": "Kon",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Kon"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jvruiz7",
+        "repo": "kon-notch"
+      }
+    ]
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.11.0",
+    "@google/genai": "^3.6.1",
+    "electron-updater": "^6.8.11"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jvruiz7/kon-notch.git"
+  }
+}
