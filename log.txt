@@ -1,0 +1,29 @@
+[23:39:50.215] janela {"x":102,"y":0,"w":820,"h":560,"dpr":1,"sw":1024} foreground: Untitled - Notepad
+[23:39:50.400] 1) passa o mouse no notch
+[23:39:51.114] estado {"sheet":false,"panel":false,"tab":""}
+[23:39:51.151] 2) clica em cada página da barra
+[23:39:51.154] botões na barra: 0
+[23:39:51.199] 3) abre Ajustes pela engrenagem
+[23:39:51.912] engrenagem {"x":618.34375,"y":241,"w":28,"h":28}
+[23:39:52.199]   +150 ms {"sheet":true,"panel":true,"tab":""} fg: Kon
+[23:39:52.460]   +400 ms {"sheet":true,"panel":false,"tab":""} fg: Kon
+[23:39:53.219]   +900 ms {"sheet":true,"panel":false,"tab":""} fg: Kon
+[23:39:54.679]   +1600 ms {"sheet":true,"panel":false,"tab":""} fg: Kon
+[23:39:54.757] aba Ajustes {"x":528.125,"y":14,"w":54.875,"h":20}
+[23:39:55.492]   depois de clicar Ajustes {"sheet":true,"panel":false,"tab":"Capacete de obra"} fg: Kon
+[23:39:56.422]   campo focado? INPUT valor=abc fg: Kon {"sheet":true,"panel":false,"tab":"Capacete de obra"}
+[23:39:56.469] select {"x":275.359375,"y":366.75,"w":327.640625,"h":28}
+[23:39:57.552]   com o select aberto {"sheet":true,"panel":false,"tab":"Capacete de obra"} fg: Kon
+[23:39:58.065]   depois do ESC {"sheet":true,"panel":false,"tab":"Capacete de obra"}
+[23:39:58.621]   depois de rolar {"sheet":true,"panel":false,"tab":"Capacete de obra"}
+[23:39:58.621] 4) clique fora (no Bloco de Notas) e volta
+[23:39:59.537]    {"sheet":true,"panel":false,"tab":"Capacete de obra"} fg: Program Manager
+[23:40:00.344]   hover de novo {"sheet":true,"panel":true,"tab":"Capacete de obra"}
+[23:40:00.415] 5) cliques rápidos alternando páginas (40 cliques)
+[23:40:06.214] CONSOLE error Failed to load resource: net::ERR_CONNECTION_RESET
+[23:40:08.246]   40 cliques em 7821 ms {"sheet":true,"panel":true,"tab":"Capacete de obra"}
+[23:40:09.099]   depois {"sheet":true,"panel":true,"tab":"Capacete de obra"}
+[23:40:10.057]   engrenagem depois dos cliques rápidos {"sheet":true,"panel":true,"tab":""}
+[23:40:10.115] 6) abre Ajustes pelo atalho do menu da bandeja não dá; testa Ctrl+Alt+Espaço (Perguntar)
+[23:40:11.661]    {"sheet":true,"panel":true,"tab":""} foco: INPUT fg: Kon
+[23:40:11.711] FIM
