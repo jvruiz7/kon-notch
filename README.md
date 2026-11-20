@@ -50,8 +50,9 @@ npm run dev        # desenvolvimento (Vite + Electron)
 npm run installer  # release/Kon-Setup-<versão>.exe + latest.yml (Linux ou WSL, sem Wine)
 ```
 
-**Publicar uma versão:** aumente `version` no `package.json`, rode `npm run installer` e crie uma Release
-`v<versão>` com os arquivos `Kon-Setup-<versão>.exe` e `latest.yml`. Os apps instalados atualizam sozinhos.
+**Publicar uma versão:** aumente `version` no `package.json` e envie para o `main`. O GitHub Actions
+compila o instalador e cria a Release `v<versão>` com `Kon-Setup-<versão>.exe` e `latest.yml`;
+os apps instalados se atualizam sozinhos.
 
 Primeira vez: o Kon abre as **boas-vindas em 3 passos** (IA, Claude Code e o que mostrar). Depois, tudo fica em **engrenagem** → **Ajustes** → cole `GEMINI_API_KEY`
 (https://aistudio.google.com/apikey) e/ou `ANTHROPIC_API_KEY` (https://console.anthropic.com/settings/keys).

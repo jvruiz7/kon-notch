@@ -1,9 +1,12 @@
-# Publica uma versão nova do Kon: ao enviar uma tag v<versão> (ex.: v1.2.0), o GitHub compila o
-# instalador e cria a Release com Kon-Setup-<versão>.exe + latest.yml. Os apps instalados se atualizam sozinhos.
+# Publica uma versão nova do Kon: quando a "version" do package.json muda no main (ou com tag v*),
+# o GitHub compila o instalador e cria a Release v<versão> com Kon-Setup-<versão>.exe + latest.yml.
+# Os apps instalados encontram a versão nova e se atualizam sozinhos.
 name: Release
 
 on:
   push:
+    branches: [main]
+    paths: ["package.json", ".github/workflows/release.yml"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -15,16 +18,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Versão já publicada?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          if gh release view "v$V" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"; echo "v$V já existe; nada a fazer."
+          fi
       - uses: actions/setup-node@v4
+        if: steps.check.outputs.skip != '1'
         with:
           node-version: 22
           cache: npm
       - name: NSIS
+        if: steps.check.outputs.skip != '1'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
       - run: npm ci
+        if: steps.check.outputs.skip != '1'
       - name: Instalador
+        if: steps.check.outputs.skip != '1'
         run: npm run installer
       - name: Release
+        if: steps.check.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -35,8 +53,9 @@ jobs:
           fi
           NOTES=".github/release-notes/$TAG.md"
           if [ -f "$NOTES" ]; then ARGS="--notes-file $NOTES"; else ARGS="--generate-notes"; fi
+          git config user.name "github-actions[bot]"; git config user.email "github-actions[bot]@users.noreply.github.com"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "release/Kon-Setup-$V.exe" release/latest.yml --clobber
           else
-            gh release create "$TAG" "release/Kon-Setup-$V.exe" release/latest.yml --title "Kon $V" $ARGS
+            gh release create "$TAG" "release/Kon-Setup-$V.exe" release/latest.yml --title "Kon $V" --target "$GITHUB_SHA" $ARGS
           fi
