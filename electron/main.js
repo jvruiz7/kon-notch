@@ -84,6 +84,10 @@ const DEFAULTS = {
   focusDnd: true,           // liga o Não incomodar do Windows durante o Focus
   wakeWord: false,          // "Kon" abre o Perguntar já ouvindo (reconhecimento de voz do Windows)
   wakeConf: 0.6,
+  outfit: "auto",           // roupa do tofu: auto (muda com o contexto), none ou uma fixa
+  soundsOn: true,
+  soundPack: "retro",
+  soundVol: 0.6,
   accent: "aurora",
   glow: 1,
   onboarded: false,

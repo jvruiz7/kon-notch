@@ -34,6 +34,8 @@ TypeScript, Tailwind e Framer Motion (mola `stiffness 380 / damping 30`).
 | **Sistema** | CPU, memória, disco e os processos mais pesados; aviso no notch quando o PC fica no limite | — |
 | **Focus de verdade** | Liga o Não incomodar do Windows durante o timer e mostra as sessões da semana | — |
 | **Aparência** | Cor de destaque e brilho do notch | — |
+| **Roupas do tofu** | Automática (capacete com o Claude trabalhando, fone com música, óculos no Focus, coroa com as tarefas do dia feitas, gorro em dezembro) ou uma fixa: boné, laço, cachecol e as outras | — |
+| **Sons** | Pacotes Retrô (padrão), Suave e Cristal para: Claude concluiu, precisa de você, lembrete, reunião, arquivo guardado e erro. Ficam mudos no Não incomodar | — |
 | **Relatar problema** | Junta registros e um print opcional num .zip e abre uma issue pronta aqui no GitHub | — |
 | **Discreto** | Some em jogos, vídeos e slides em tela cheia; vira uma linha fina sobre janelas maximizadas; fica fora de prints e de compartilhamento de tela | — |
 | **To-do + calendário, Focus, Water** | Salvos no computador | — |

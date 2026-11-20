@@ -1,4 +1,4 @@
-import React from "react";
+import React, { createContext, useContext } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 /**
@@ -99,8 +99,48 @@ const MOTION: Partial<Record<TofuMood, any>> = {
   listening: { animate: { scale: [1, 1.05, 1] }, transition: { duration: 1.1, repeat: Infinity, ease: "easeInOut" } },
 };
 
+/* ─── Roupas ───
+   Desenhadas num quadro 80×60 onde o corpo do tofu ocupa x 14–66 e y 16–58 (mesma escala do esboço aprovado). */
+export type Outfit = "none" | "helmet" | "headphones" | "sunglasses" | "santa" | "cap" | "bow" | "scarf" | "crown";
+export const OUTFITS: { id: Outfit; label: string; hint: string }[] = [
+  { id: "helmet", label: "Capacete de obra", hint: "Claude trabalhando" },
+  { id: "headphones", label: "Fone de ouvido", hint: "tocando música" },
+  { id: "sunglasses", label: "Óculos escuros", hint: "modo foco" },
+  { id: "santa", label: "Gorro de Natal", hint: "em dezembro" },
+  { id: "cap", label: "Boné", hint: "dia a dia" },
+  { id: "bow", label: "Laço", hint: "fofura" },
+  { id: "scarf", label: "Cachecol", hint: "dias frios" },
+  { id: "crown", label: "Coroa", hint: "tarefas do dia 100%" },
+];
+const OUTFIT_SVG: Record<Exclude<Outfit, "none">, React.ReactNode> = {
+  helmet: (<><path d="M12 22 Q40 -4 68 22 Z" fill="#F5B82E" /><rect x="8" y="20" width="64" height="6" rx="3" fill="#E0A11B" /><rect x="37" y="4" width="6" height="16" rx="3" fill="#E0A11B" /></>),
+  headphones: (<><path d="M14 32 Q14 6 40 6 Q66 6 66 32" stroke="#333" strokeWidth="4" fill="none" /><rect x="7" y="28" width="11" height="16" rx="5" fill="#E8508F" /><rect x="62" y="28" width="11" height="16" rx="5" fill="#E8508F" /></>),
+  sunglasses: (<><rect x="22" y="31" width="16" height="10" rx="4" fill="#111" /><rect x="42" y="31" width="16" height="10" rx="4" fill="#111" /><rect x="37" y="34" width="6" height="2.5" fill="#111" /><rect x="25" y="33" width="5" height="2" rx="1" fill="#555" /></>),
+  santa: (<><path d="M16 20 Q34 -6 62 12 L66 20 Z" fill="#D9363E" /><rect x="12" y="17" width="58" height="7" rx="3.5" fill="#fff" /><circle cx="64" cy="10" r="5" fill="#fff" /></>),
+  cap: (<><path d="M16 22 Q40 2 64 22 Z" fill="#3A6FD8" /><rect x="40" y="18" width="34" height="6" rx="3" fill="#2B57B0" /><circle cx="40" cy="9" r="2.5" fill="#2B57B0" /></>),
+  bow: (<><path d="M40 16 L26 8 L26 24 Z" fill="#F06AA8" /><path d="M40 16 L54 8 L54 24 Z" fill="#F06AA8" /><circle cx="40" cy="16" r="4" fill="#D84F90" /></>),
+  scarf: (<><rect x="12" y="48" width="56" height="9" rx="4" fill="#2BA88A" /><rect x="50" y="50" width="9" height="13" rx="3" fill="#228E74" /><rect x="18" y="50" width="4" height="5" fill="#fff" opacity=".6" /><rect x="28" y="50" width="4" height="5" fill="#fff" opacity=".6" /></>),
+  crown: (<><path d="M20 20 L24 6 L32 14 L40 4 L48 14 L56 6 L60 20 Z" fill="#F2C744" /><rect x="20" y="18" width="40" height="5" rx="2" fill="#D9AE2C" /><circle cx="40" cy="12" r="2.5" fill="#E2483D" /></>),
+};
+/** Roupa atual do tofu (o App decide: automática pelo contexto ou fixa nos Ajustes). */
+export const OutfitContext = createContext<Outfit>("none");
+
+function OutfitLayer({ outfit, s, front }: { outfit: Outfit; s: number; front: boolean }) {
+  if (!outfit || outfit === "none") return null;
+  const u = s / 10; // 1 unidade do desenho
+  return (
+    <motion.svg key={outfit} initial={{ opacity: 0, y: -2 * u }} animate={{ opacity: 1, y: 0 }} transition={SPRING}
+      width={80 * u} height={64 * u} viewBox="0 0 80 64" className="absolute pointer-events-none"
+      style={{ left: -14 * u, top: -16 * u, overflow: "visible", zIndex: front ? 2 : 0 }}>
+      {OUTFIT_SVG[outfit as Exclude<Outfit, "none">]}
+    </motion.svg>
+  );
+}
+
 /** size = escala: 1 → tofu de ~26×21 px (notch fechado); 3 → ~78×63 px (páginas grandes). */
-export function KonTofu({ mood = "idle", size = 1 }: { mood?: TofuMood; size?: number }) {
+export function KonTofu({ mood = "idle", size = 1, outfit }: { mood?: TofuMood; size?: number; outfit?: Outfit }) {
+  const ctxOutfit = useContext(OutfitContext);
+  const wear = size >= 0.6 && mood !== "eating" ? (outfit ?? ctxOutfit) : "none";
   const s = size * 5;
   const w = 5.2 * s, h = 4.2 * s;
   const m = MOTION[mood] || {};
@@ -108,7 +148,7 @@ export function KonTofu({ mood = "idle", size = 1 }: { mood?: TofuMood; size?: n
     <motion.div className="relative shrink-0" style={{ width: w, height: h }} animate={m.animate || {}} transition={m.transition}>
       <motion.div className="absolute inset-0 grid place-items-center overflow-visible"
         initial={false} animate={{ backgroundColor: TINT[mood] }} transition={{ duration: 0.4 }}
-        style={{ borderRadius: 1.55 * s, boxShadow: `inset 0 ${-0.5 * s}px ${1.2 * s}px rgba(0,0,0,.08)` }}>
+        style={{ zIndex: 1, borderRadius: 1.55 * s, boxShadow: `inset 0 ${-0.5 * s}px ${1.2 * s}px rgba(0,0,0,.08)` }}>
         {mood === "eating" && (
           <motion.span className="absolute rounded-full bg-[#111]" style={{ top: 0.55 * s, left: 0.9 * s, right: 0.9 * s }}
             initial={{ height: 0 }} animate={{ height: [0.6 * s, 1.0 * s, 0.6 * s] }} transition={{ duration: 0.9, repeat: Infinity }} />
@@ -121,6 +161,7 @@ export function KonTofu({ mood = "idle", size = 1 }: { mood?: TofuMood; size?: n
           </>
         )}
       </motion.div>
+      <AnimatePresence>{wear !== "none" && <OutfitLayer key={wear} outfit={wear} s={s} front />}</AnimatePresence>
       {mood === "sleep" && size >= 0.9 && (
         <motion.span className="absolute font-semibold text-indigo-200" style={{ fontSize: 2 * s, right: -1.6 * s, top: -1.6 * s }}
           animate={{ opacity: [0, 1, 0], y: [0.6 * s, -0.4 * s, -1 * s] }} transition={{ duration: 2.4, repeat: Infinity }}>z</motion.span>

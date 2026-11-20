@@ -5,7 +5,7 @@ const read = () => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); 
 const write = (v) => { try { localStorage.setItem(LS, JSON.stringify(v)); } catch {} };
 const DEFAULTS = { provider: "gemini", geminiModel: "gemini-2.5-flash", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: true,
   openMode: "hover", notchSize: "normal", display: "primary", hideFullscreen: true, slimOverMax: true, hideInCapture: true, approvals: true,
-  claudePlan: "auto", icsUrl: "", clipboardOn: true, autoUpdate: true, onboarded: true };
+  claudePlan: "auto", icsUrl: "", clipboardOn: true, autoUpdate: true, onboarded: true, outfit: "auto", soundsOn: true, soundPack: "retro", soundVol: 0.6 };
 const DAY = 864e5;
 const day0 = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); };
 // dados de exemplo para ver a página de uso no navegador

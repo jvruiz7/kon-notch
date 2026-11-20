@@ -17,7 +17,8 @@ import {
   detectLangLocal, translateLocal,
 } from "./data.js";
 import { Eyes, AlbumArt, Equalizer, Waveform, Seg, Ring, Ruler, Switch, PillBtn, PageRow } from "./ui.jsx";
-import { KonTofu, KonTofuEating } from "./components/KonMascot";
+import { KonTofu, KonTofuEating, OutfitContext, OUTFITS } from "./components/KonMascot";
+import { playSound, SOUND_PACKS } from "./sounds.js";
 import { bridge } from "./bridge.js";
 import { convertUnits } from "./units.js";
 import { parseReminder, describeWhen } from "./reminders.js";
@@ -134,7 +135,7 @@ export default function KonIsland() {
   const [pageOn, setPageOn] = usePersist("pagesOn.v2", Object.fromEntries(DEFAULT_ORDER.map((k) => [k, true])));
   const [sheetTab, setSheetTab] = useState("pages");
   const [settings, setSettings] = useState({ provider: "gemini", geminiModel: "gemini-2.5-flash", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: !bridge.desktop, hasGeminiKey: false, hasAnthropicKey: false,
-    openMode: "hover", notchSize: "normal", display: "primary", hideFullscreen: true, slimOverMax: true, hideInCapture: true, approvals: true, claudePlan: "auto", icsUrl: "", clipboardOn: true, autoUpdate: true, onboarded: true, loaded: false });
+    openMode: "hover", notchSize: "normal", display: "primary", hideFullscreen: true, slimOverMax: true, hideInCapture: true, approvals: true, claudePlan: "auto", icsUrl: "", clipboardOn: true, autoUpdate: true, onboarded: true, outfit: "auto", soundsOn: true, soundPack: "retro", soundVol: 0.6, loaded: false });
   const [obStep, setObStep] = useState(0);
   const [fg, setFg] = useState({ full: false, max: false });
   const [priv, setPriv] = useState({ mic: [], cam: [] });
@@ -322,6 +323,7 @@ export default function KonIsland() {
   const islandBoxRef = useRef(null);
 
   const timerTotalRef = useRef(timerTotal); timerTotalRef.current = timerTotal;
+  const devSoundIdx = useRef(-1);
   const later = (fn, ms) => { const id = setTimeout(fn, ms); timers.current.push(id); return id; };
   const clearTimers = () => { timers.current.forEach(clearTimeout); timers.current = []; };
   const copy = async (text, key) => {
@@ -329,7 +331,10 @@ export default function KonIsland() {
     if (ok && key) { setCopied(key); setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500); }
     return ok;
   };
+  /* Sons (respeitam o Não incomodar do Kon) */
+  const sfx = (ev) => { const st = settingsRef.current; if (st.soundsOn === false || dndRef.current) return; playSound(ev, st.soundPack || "retro", st.soundVol ?? 0.6); };
   const toast = (text, kind = "info", icon = null) => {
+    if (kind === "error") sfx("error");
     const id = uid();
     setToasts((t) => [...t.slice(-2), { id, text, kind, icon }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 2800);
@@ -462,7 +467,8 @@ export default function KonIsland() {
       return;
     }
     if (name === "SessionStart" || name === "SessionEnd") return;
-    if (name === "Stop") { toast("Claude Code terminou a tarefa", "success", "check"); setTimeout(() => refreshUsage(), 1500); }
+    if (name === "Stop") { sfx("done"); toast("Claude Code terminou a tarefa", "success", "check"); setTimeout(() => refreshUsage(), 1500); }
+    if (name === "Notification") sfx("attention");
     setClaude((c) => {
       const fresh = { status: "working", title: c.title || "Working…", file: "", removed: "", added: "", plus: 0, minus: 0, stage: 0, startedAt: t, doneAt: 0, note: "" };
       const base = c.status === "working" ? c : fresh;
@@ -498,10 +504,12 @@ export default function KonIsland() {
   };
   useEffect(() => { refreshCal(); const t = setInterval(() => refreshCal(), 10 * 60e3); return () => clearInterval(t); }, [settings.icsUrl]); // eslint-disable-line
   useEffect(() => { bridge.wakeGet().then(setWake); return bridge.on("wake:state", setWake); }, []);
+  /* Avisos vindos do processo principal (PC sobrecarregado, falha de captura etc.) */
+  useEffect(() => bridge.on("toast", (t) => t?.text && toast(t.text, t.kind || "info", t.icon || null)), []);
   /* Lembretes */
   useEffect(() => {
     bridge.remList().then(setReminders);
-    const onDue = (r) => { setDueRems((l) => (l.some((x) => x.id === r.id) ? l : [...l, r])); bridge.remList().then(setReminders); };
+    const onDue = (r) => { sfx("reminder"); setDueRems((l) => (l.some((x) => x.id === r.id) ? l : [...l, r])); bridge.remList().then(setReminders); };
     const offA = bridge.on("reminder:due", onDue);
     const offB = bridge.on("reminders:changed", setReminders);
     const web = (e) => onDue(e.detail);
@@ -715,6 +723,7 @@ export default function KonIsland() {
       const r = await bridge.stashAdd(paths);
       setStash(r.list);
       flashSuccess();
+      if (r.added.length) sfx("file");
       toast(r.added.length === 1 ? `Guardado na ilha: ${r.added[0].name}` : r.added.length ? `${r.added.length} itens guardados na ilha` : "Esses itens já estavam na ilha", "success", "file");
     };
     window.addEventListener("dragenter", onEnter);
@@ -1019,6 +1028,13 @@ export default function KonIsland() {
         : meetingSoon && meetingSoon.start - nowMs <= 2 * 60e3 && !dismissed[`mt-${meetingSoon.id}`] ? { kind: "meeting", key: `mt-${meetingSoon.id}`, mood: "attention", title: meetingSoon.title, sub: meetingSoon.start > nowMs ? `Começa às ${fmtHM(meetingSoon.start)}${meetingSoon.link ? " · link pronto" : ""}` : `Começou às ${fmtHM(meetingSoon.start)}` }
           : null;
   const actionRef = useRef(null); actionRef.current = action;
+  useEffect(() => { if (perm?.id) sfx("attention"); }, [perm?.id]); // eslint-disable-line
+  const meetKey = action?.kind === "meeting" ? action.key : null;
+  useEffect(() => { if (meetKey) sfx("meeting"); }, [meetKey]); // eslint-disable-line
+  /* Roupa do tofu: automática pelo que está acontecendo, ou fixa nos Ajustes */
+  const allTasksDone = todos.some((t) => t.type === "task") && todos.filter((t) => t.type === "task").every((t) => t.done);
+  const outfit = settings.outfit && settings.outfit !== "auto" ? settings.outfit
+    : claudeRunning ? "helmet" : playing ? "headphones" : timerRunning ? "sunglasses" : allTasksDone ? "crown" : now.getMonth() === 11 ? "santa" : "none";
   const activeToast = view === "compact" && !dragging && !action ? toasts[toasts.length - 1] : null;
   const slim = view === "compact" && !dragging && !action && !activeToast && !hover && mode === "idle" && settings.slimOverMax && fg.max;
   const nScale = view === "compact" && !dragging ? ({ small: 0.88, large: 1.14 }[settings.notchSize] || 1) : 1;
@@ -2537,6 +2553,32 @@ export default function KonIsland() {
           <Switch on={settings.wakeWord === true} onChange={(v) => saveSettings({ wakeWord: v })} color="#10b981" />
         </div>
       )}
+      <div className="text-[10.5px] font-semibold tracking-[0.1em] text-white/40 mt-1">MASCOTE E SONS</div>
+      <div className="grid grid-cols-5 gap-1.5">
+        {[{ id: "auto", label: "Automática", hint: "muda com o que está acontecendo" }, { id: "none", label: "Sem roupa", hint: "" }, ...OUTFITS].map((o) => {
+          const on = (settings.outfit || "auto") === o.id;
+          return (
+            <button key={o.id} onClick={() => saveSettings({ outfit: o.id })} title={o.hint || o.label}
+              className={`h-[62px] rounded-xl flex flex-col items-center justify-end gap-1 pb-1.5 border transition-colors ${on ? "bg-white/[0.1] border-white/40" : "bg-white/[0.03] border-white/[0.06] hover:bg-white/[0.07]"}`}>
+              <div className="h-[30px] grid place-items-end"><KonTofu mood="idle" size={1.05} outfit={o.id === "auto" ? outfit : o.id} /></div>
+              <span className="text-[9.5px] text-white/70 leading-none truncate max-w-full px-1">{o.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-2 h-9 px-2.5 rounded-xl bg-white/[0.04]">
+        <span className="flex-1 text-[11.5px] font-medium">Sons</span>
+        <Seg id="pack" small value={settings.soundPack || "retro"} onChange={(v) => { saveSettings({ soundPack: v }); playSound("done", v, settings.soundVol ?? 0.6); }} options={Object.entries(SOUND_PACKS)} />
+        <Switch on={settings.soundsOn !== false} onChange={(v) => saveSettings({ soundsOn: v })} color="#10b981" />
+      </div>
+      {settings.soundsOn !== false && (
+        <div className="flex items-center gap-2.5 h-9 px-2.5 rounded-xl bg-white/[0.04]">
+          <span className="text-[11.5px] font-medium shrink-0">Volume</span>
+          <input type="range" min="5" max="100" step="5" value={Math.round((settings.soundVol ?? 0.6) * 100)} onChange={(e) => setSettings((st) => ({ ...st, soundVol: +e.target.value / 100 }))}
+            onMouseUp={(e) => { const v = +e.currentTarget.value / 100; saveSettings({ soundVol: v }); playSound("attention", settings.soundPack || "retro", v); }} className="kon-range flex-1" />
+          <span className="w-9 text-right text-[10.5px] tabular-nums text-white/50">{Math.round((settings.soundVol ?? 0.6) * 100)}%</span>
+        </div>
+      )}
       <div className="text-[10.5px] font-semibold tracking-[0.1em] text-white/40 mt-1">AGENDA</div>
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-white/[0.06] border border-white/[0.08] focus-within:border-indigo-400/60">
@@ -2650,6 +2692,7 @@ export default function KonIsland() {
     ["Permissão", () => setPerms((l) => [...l, l.length % 2
       ? { id: uid(), tool: "Bash", input: { command: "npm run build && npm test" }, cwd: "C:/Projetos/kon-notch", at: Date.now() }
       : { id: uid(), tool: "Edit", input: { file_path: "C:/Projetos/kon-notch/src/orcamento.ts", old_string: "const bdi = 0.25;\nconst total = custo * (1 + bdi);", new_string: "const bdi = calcularBdi(obra);\nconst total = arredondar(custo * (1 + bdi), 2);\nlog(total);" }, cwd: "C:/Projetos/kon-notch", at: Date.now() }])],
+    ["Som", () => { const evs = ["done", "attention", "reminder", "meeting", "file", "error"]; const i = (devSoundIdx.current = (devSoundIdx.current + 1) % evs.length); playSound(evs[i], settings.soundPack || "retro", settings.soundVol ?? 0.6); toast(`Som: ${evs[i]}`); }],
     ["Texto", () => { setTa({ text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa", status: "idle", action: "", result: "", error: "" }); setView("textact"); }],
     ["Reunião", () => { const t = Date.now() + 90e3; setCalEvents([{ id: "demo|" + t, title: "Daily com o time", start: t, end: t + 30 * 60e3, allDay: false, link: "https://meet.google.com/abc-defg-hij" }]); }],
     ["Uso 84%", () => setUsage((u) => u && ({ ...u, window: { ...(u.window || {}), pct: u.window?.pct === 84 ? 73 : 84, resetsAt: Date.now() + 38 * 60e3 } }))],
@@ -2659,6 +2702,7 @@ export default function KonIsland() {
   ];
 
   return (
+    <OutfitContext.Provider value={outfit}>
     <div className="fixed inset-0 overflow-clip text-white font-sans antialiased select-none">
       {/* ───── Notch / Dynamic Island ───── */}
       <motion.div className="absolute inset-x-0 top-0 z-50 flex justify-center pointer-events-none" initial={false} animate={{ y: islandTop }} transition={SPRING}>
@@ -2725,5 +2769,6 @@ export default function KonIsland() {
         )}
       </AnimatePresence>
     </div>
+    </OutfitContext.Provider>
   );
 }
