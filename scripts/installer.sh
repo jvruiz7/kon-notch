@@ -8,9 +8,14 @@ OUT="release/Kon-Setup-$V.exe"
 rm -rf release/win-unpacked
 npx vite build
 npx electron-builder --win dir --x64 --publish never
-N=$(ls -d ~/.cache/electron-builder/nsis-3.*/nsis-3.* | grep -v '\.7z$' | head -1)
-chmod +x "$N/linux/makensis"
-NSISDIR="$N" "$N/linux/makensis" -V2 -DVERSION="$V" -DSRC="$PWD/release/win-unpacked" -DOUT="$PWD/$OUT" build/installer.nsi
+ARGS="-V2 -DVERSION=$V -DSRC=$PWD/release/win-unpacked -DOUT=$PWD/$OUT build/installer.nsi"
+if command -v makensis >/dev/null 2>&1; then
+  makensis $ARGS                                   # NSIS do sistema (ex.: apt install nsis)
+else
+  N=$(ls -d ~/.cache/electron-builder/nsis-3.*/nsis-3.* | grep -v '\.7z$' | head -1)
+  chmod +x "$N/linux/makensis"
+  NSISDIR="$N" "$N/linux/makensis" $ARGS           # NSIS que vem com o electron-builder
+fi
 node -e '
 const fs=require("fs"),c=require("crypto");const [v,f]=process.argv.slice(1);
 const b=fs.readFileSync(f);const sha=c.createHash("sha512").update(b).digest("base64");const name=f.split("/").pop();
