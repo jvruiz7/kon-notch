@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 const CHANNELS = [
   "shortcut", "win:blurred", "media:state", "volume:state", "claude:event", "helper:ready",
   "ocr:started", "ocr:result", "ai:event", "toast", "fg:state", "privacy:state", "claude:perm-closed",
-  "clip:changed", "update:ready", "update:status", "reminder:due", "reminders:changed", "textact:open", "wake:state", "settings:changed",
+  "clip:changed", "update:ready", "update:status", "reminder:due", "reminders:changed", "textact:open", "wake:state", "settings:changed", "key:detected",
 ];
 
 contextBridge.exposeInMainWorld("kon", {
@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("kon", {
   getSettings: () => ipcRenderer.invoke("settings:get"),
   setSettings: (patch) => ipcRenderer.invoke("settings:set", patch),
   setKey: (provider, key) => ipcRenderer.invoke("keys:set", { provider, key }),
+  keyFromClipboard: (provider) => ipcRenderer.invoke("keys:fromClipboard", provider),
   // IA
   aiStream: (req) => ipcRenderer.send("ai:stream", req),
   aiAbort: (id) => ipcRenderer.send("ai:abort", id),

@@ -64,7 +64,7 @@ const userFile = (name) => path.join(app.getPath("userData"), name);
 /* ═════════ Configurações + chaves criptografadas (safeStorage) ═════════ */
 const DEFAULTS = {
   provider: "gemini",
-  geminiModel: "gemini-2.5-flash",
+  geminiModel: "gemini-flash-latest", // apelido do Google que sempre aponta para o Flash atual
   claudeModel: "claude-haiku-5-5",
   webSearch: true,
   autoStart: false,
@@ -101,6 +101,8 @@ function readSettings() {
   try { s = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(userFile("settings.json"), "utf8")) }; }
   catch { s = { ...DEFAULTS }; }
   if (!s.modelsV) { if (s.claudeModel === "claude-sonnet-5-5") s.claudeModel = "claude-haiku-5-5"; s.modelsV = 2; } // Haiku 5.5 virou o padrão
+  // os modelos Gemini 2.5 (e anteriores) foram desligados pelo Google em 16/10/2026
+  if (s.modelsV < 3) { if (/^gemini-(1\.|2\.0|2\.5)/.test(s.geminiModel || "")) s.geminiModel = "gemini-flash-latest"; s.modelsV = 3; }
   settingsCache = s;
   return { ...s };
 }
@@ -143,6 +145,17 @@ ipcMain.handle("settings:set", (_e, patch = {}) => {
   if ("clipboardOn" in clean && !clean.clipboardOn) clipLast = readClipText();
   return publicSettings();
 });
+// quem já tem GEMINI_API_KEY / ANTHROPIC_API_KEY no Windows (ex.: usa o Gemini CLI) não precisa colar nada
+function importEnvKeys() {
+  try {
+    const st = readSettings(), patch = {};
+    const g = (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
+    const a = (process.env.ANTHROPIC_API_KEY || "").trim();
+    if (g && !decryptKey(st.geminiKeyEnc) && /^AIza/.test(g)) patch.geminiKeyEnc = encryptKey(g);
+    if (a && !decryptKey(st.anthropicKeyEnc) && /^sk-ant-/.test(a)) patch.anthropicKeyEnc = encryptKey(a);
+    if (Object.keys(patch).length) writeSettings(patch);
+  } catch {}
+}
 ipcMain.handle("keys:set", (_e, { provider, key }) => {
   const field = provider === "anthropic" ? "anthropicKeyEnc" : "geminiKeyEnc";
   writeSettings({ [field]: encryptKey(String(key || "").trim()) });
@@ -700,11 +713,34 @@ function readClipText() {
 function clipTick() {
   try { clipTickUnsafe(); } catch (e) { console.warn("clipboard", e?.message || e); }
 }
+// chave copiada do Google AI Studio ou do Console da Anthropic: o Kon oferece usar (a chave nunca vai para a interface)
+const KEY_RE = { gemini: /^AIza[0-9A-Za-z_-]{35}$/, anthropic: /^sk-ant-[0-9A-Za-z_-]{20,}$/ };
+function detectKey(t) {
+  const v = String(t || "").trim();
+  const st = readSettings();
+  for (const [prov, re] of Object.entries(KEY_RE)) {
+    if (!re.test(v)) continue;
+    const field = prov === "anthropic" ? "anthropicKeyEnc" : "geminiKeyEnc";
+    if (decryptKey(st[field]) === v) return; // já é a chave salva
+    send("key:detected", { provider: prov, replace: !!decryptKey(st[field]) });
+    return;
+  }
+}
+ipcMain.handle("keys:fromClipboard", (_e, provider) => {
+  const v = readClipText().trim();
+  const re = KEY_RE[provider === "anthropic" ? "anthropic" : "gemini"];
+  if (!re.test(v)) return { ok: false, error: "A chave não está mais na área de transferência" };
+  writeSettings({ [provider === "anthropic" ? "anthropicKeyEnc" : "geminiKeyEnc"]: encryptKey(v) });
+  try { clipboard.writeText(""); clipLast = ""; } catch {} // não deixa a chave largada na área de transferência
+  return { ok: true, settings: publicSettings() };
+});
 function clipTickUnsafe() {
-  if (readSettings().clipboardOn === false || Date.now() < clipSuspendUntil) return;
+  if (Date.now() < clipSuspendUntil) return;
   const t = readClipText();
   if (!t || t === clipLast) return;
   clipLast = t;
+  detectKey(t);
+  if (readSettings().clipboardOn === false) return;
   if (!t.trim() || t.length > 20000 || looksSecret(t)) return;
   const list = clipRead().filter((x) => x.text !== t);
   list.unshift({ id: crypto.randomUUID(), text: t, at: Date.now(), pinned: false });
@@ -1173,6 +1209,7 @@ if (process.argv.includes("--remove-hooks")) {
     startHelper();
     startClaudeServer();
     upgradeHooks();
+    importEnvKeys();
     startUpdater();
     clipLast = readClipText();
     setInterval(clipTick, 800);

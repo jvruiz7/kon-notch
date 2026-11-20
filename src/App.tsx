@@ -134,7 +134,7 @@ export default function KonIsland() {
   const [pageOrder, setPageOrder] = usePersist("pages.v2", DEFAULT_ORDER);
   const [pageOn, setPageOn] = usePersist("pagesOn.v2", Object.fromEntries(DEFAULT_ORDER.map((k) => [k, true])));
   const [sheetTab, setSheetTab] = useState("pages");
-  const [settings, setSettings] = useState({ provider: "gemini", geminiModel: "gemini-2.5-flash", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: !bridge.desktop, hasGeminiKey: false, hasAnthropicKey: false,
+  const [settings, setSettings] = useState({ provider: "gemini", geminiModel: "gemini-flash-latest", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: !bridge.desktop, hasGeminiKey: false, hasAnthropicKey: false,
     openMode: "hover", notchSize: "normal", display: "primary", hideFullscreen: true, slimOverMax: true, hideInCapture: true, approvals: true, claudePlan: "auto", icsUrl: "", clipboardOn: true, autoUpdate: true, onboarded: true, outfit: "auto", soundsOn: true, soundPack: "retro", soundVol: 0.6, loaded: false });
   const [obStep, setObStep] = useState(0);
   const [fg, setFg] = useState({ full: false, max: false });
@@ -166,7 +166,8 @@ export default function KonIsland() {
   const [mix, setMix] = useState(null);
   const mixSend = useRef({});
   const [ta, setTa] = useState({ text: "", status: "idle", action: "", result: "", error: "" }); // ações no texto selecionado
-  const [dueRems, setDueRems] = useState([]);       // lembretes que tocaram e esperam você
+  const [dueRems, setDueRems] = useState([]);
+  const [keyOffer, setKeyOffer] = useState(null); // chave copiada: { provider, replace }       // lembretes que tocaram e esperam você
   const [keyDraft, setKeyDraft] = useState({ gemini: "", anthropic: "" });
   const [showKey, setShowKey] = useState(false);
 
@@ -498,6 +499,14 @@ export default function KonIsland() {
   useEffect(() => { bridge.wakeGet().then(setWake); return bridge.on("wake:state", setWake); }, []);
   /* Avisos vindos do processo principal (PC sobrecarregado, falha de captura etc.) */
   useEffect(() => bridge.on("toast", (t) => t?.text && toast(t.text, t.kind || "info", t.icon || null)), []);
+  /* Chave de API copiada: oferece usar no Kon */
+  useEffect(() => bridge.on("key:detected", (k) => { setKeyOffer(k); sfx("attention"); }), []);
+  const useCopiedKey = async () => {
+    const k = keyOffer; setKeyOffer(null);
+    const r = await bridge.keyFromClipboard(k.provider);
+    if (r.ok) { setSettings({ ...r.settings, loaded: true }); flashSuccess(); toast(`Chave do ${k.provider === "anthropic" ? "Claude" : "Gemini"} salva com segurança`, "success", "check"); }
+    else toast(r.error || "Não consegui salvar a chave", "error");
+  };
   /* Lembretes */
   useEffect(() => {
     bridge.remList().then(setReminders);
@@ -1015,6 +1024,7 @@ export default function KonIsland() {
   const perm = perms[0];
   const action = view !== "compact" || dragging ? null
     : perm ? { kind: "perm", key: perm.id, mood: "attention", ...permText(perm) }
+      : keyOffer ? { kind: "key", key: `key-${keyOffer.provider}`, mood: "attention", title: `Chave do ${keyOffer.provider === "anthropic" ? "Claude" : "Gemini"} copiada`, sub: keyOffer.replace ? "Trocar pela chave salva no Kon?" : "Usar no Kon? Fica criptografada só neste computador." }
       : dueRems[0] ? { kind: "reminder", key: `rem-${dueRems[0].id}`, mood: "attention", title: dueRems[0].text, sub: `Lembrete das ${fmtHM(dueRems[0].at)}${dueRems.length > 1 ? ` · +${dueRems.length - 1}` : ""}` }
       : update && !dismissed[`upd-${update.version}`] ? { kind: "update", key: `upd-${update.version}`, mood: "done", title: `Kon ${update.version} pronto para instalar`, sub: "Baixado em segundo plano · reinicia em segundos" }
         : meetingSoon && meetingSoon.start - nowMs <= 2 * 60e3 && !dismissed[`mt-${meetingSoon.id}`] ? { kind: "meeting", key: `mt-${meetingSoon.id}`, mood: "attention", title: meetingSoon.title, sub: meetingSoon.start > nowMs ? `Começa às ${fmtHM(meetingSoon.start)}${meetingSoon.link ? " · link pronto" : ""}` : `Começou às ${fmtHM(meetingSoon.start)}` }
@@ -2279,6 +2289,9 @@ export default function KonIsland() {
         {action.kind === "perm" ? (<>
           <PillBtn onClick={() => decidePerm(perm.id, "deny")}>Negar</PillBtn>
           <PillBtn onClick={() => decidePerm(perm.id, "allow")} primary>Permitir</PillBtn>
+        </>) : action.kind === "key" ? (<>
+          <PillBtn onClick={() => setKeyOffer(null)}>Agora não</PillBtn>
+          <PillBtn primary onClick={useCopiedKey}><KeyRound size={11} /> Usar</PillBtn>
         </>) : action.kind === "reminder" ? (<>
           <PillBtn onClick={() => closeReminder(dueRems[0], 10)}>Adiar 10 min</PillBtn>
           <PillBtn primary onClick={() => closeReminder(dueRems[0])}><Check size={11} /> Ok</PillBtn>
@@ -2455,7 +2468,7 @@ export default function KonIsland() {
       {KeyField({ provider: "anthropic", label: "ANTHROPIC_API_KEY", placeholder: "sk-ant-…", link: "https://console.anthropic.com/settings/keys", has: settings.hasAnthropicKey })}
       <div className="text-[10px] text-white/35 -mt-1">{settings.secure === false && REAL ? "Criptografia do sistema indisponível — chaves salvas localmente." : "Chaves criptografadas pelo Windows (safeStorage), só neste computador."}</div>
       <div className="grid grid-cols-2 gap-2">
-        {[["geminiModel", "Modelo Gemini", ["gemini-2.5-flash", "gemini-flash-latest", "gemini-3.5-flash", "gemini-3.6-flash"]], ["claudeModel", "Modelo Claude", ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]]].map(([k, label, opts]) => (
+        {[["geminiModel", "Modelo Gemini", ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"]], ["claudeModel", "Modelo Claude", ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]]].map(([k, label, opts]) => (
           <label key={k} className="flex flex-col gap-1">
             <span className="text-[10.5px] font-medium text-white/55">{label}</span>
             <input list={`dl-${k}`} defaultValue={settings[k]} key={`${k}-${settings[k]}`} onBlur={(e) => e.target.value.trim() && saveSettings({ [k]: e.target.value.trim() })}

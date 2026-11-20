@@ -3,7 +3,7 @@
 const LS = "kon.web.settings";
 const read = () => { try { return JSON.parse(localStorage.getItem(LS) || "{}"); } catch { return {}; } };
 const write = (v) => { try { localStorage.setItem(LS, JSON.stringify(v)); } catch {} };
-const DEFAULTS = { provider: "gemini", geminiModel: "gemini-2.5-flash", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: true,
+const DEFAULTS = { provider: "gemini", geminiModel: "gemini-flash-latest", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: true,
   openMode: "hover", notchSize: "normal", display: "primary", hideFullscreen: true, slimOverMax: true, hideInCapture: true, approvals: true,
   claudePlan: "auto", icsUrl: "", clipboardOn: true, autoUpdate: true, onboarded: true, outfit: "auto", soundsOn: true, soundPack: "retro", soundVol: 0.6 };
 const DAY = 864e5;
@@ -25,6 +25,7 @@ const webBridge = {
   getSettings: async () => pub(),
   setSettings: async (patch) => { write({ ...read(), ...patch }); return pub(); },
   setKey: async () => pub(),
+  keyFromClipboard: async () => ({ ok: false, error: "Só no app desktop" }),
   aiStream: () => {}, aiAbort: () => {},
   aiOnce: async () => ({ ok: false, code: "NO_KEY" }),
   transcribe: async () => ({ ok: false, code: "NO_KEY" }),
