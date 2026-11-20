@@ -41,6 +41,13 @@ const pendingPerms = new Map(); // pedidos de permissão do Claude Code aguardan
 const pendingOcr = new Map();
 const aiControllers = new Map();
 
+// Nenhum erro inesperado do processo principal deve virar caixa de diálogo: registra em kon-error.log
+process.on("uncaughtException", (e) => {
+  try { fs.appendFileSync(path.join(app.getPath("userData"), "kon-error.log"), `${new Date().toISOString()} ${e?.stack || e}\n`); } catch {}
+  console.error(e);
+});
+process.on("unhandledRejection", (e) => { try { fs.appendFileSync(path.join(app.getPath("userData"), "kon-error.log"), `${new Date().toISOString()} rejection ${e?.stack || e}\n`); } catch {} });
+
 const send = (ch, payload) => { if (win && !win.isDestroyed()) win.webContents.send(ch, payload); };
 const userFile = (name) => path.join(app.getPath("userData"), name);
 
@@ -67,17 +74,21 @@ const DEFAULTS = {
   geminiKeyEnc: "",
   anthropicKeyEnc: "",
 };
+let settingsCache = null; // lido muitas vezes por segundo (hit-test, clipboard): fica em memória
 function readSettings() {
+  if (settingsCache) return { ...settingsCache };
   let s;
   try { s = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(userFile("settings.json"), "utf8")) }; }
   catch { s = { ...DEFAULTS }; }
   if (!s.modelsV) { if (s.claudeModel === "claude-sonnet-5-5") s.claudeModel = "claude-haiku-5-5"; s.modelsV = 2; } // Haiku 5.5 virou o padrão
-  return s;
+  settingsCache = s;
+  return { ...s };
 }
 function writeSettings(patch) {
   const next = { ...readSettings(), ...patch };
   fs.mkdirSync(app.getPath("userData"), { recursive: true });
   fs.writeFileSync(userFile("settings.json"), JSON.stringify(next, null, 2));
+  settingsCache = next;
   if ("autoStart" in patch) app.setLoginItemSettings({ openAtLogin: !!next.autoStart, path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath });
   return next;
 }
@@ -108,7 +119,7 @@ ipcMain.handle("settings:set", (_e, patch = {}) => {
   if ("display" in clean) placeWindow();
   if ("hideFullscreen" in clean) applyFullscreen();
   if ("icsUrl" in clean) calCache = null;
-  if ("clipboardOn" in clean && !clean.clipboardOn) clipLast = clipboard.readText();
+  if ("clipboardOn" in clean && !clean.clipboardOn) clipLast = readClipText();
   return publicSettings();
 });
 ipcMain.handle("keys:set", (_e, { provider, key }) => {
@@ -637,7 +648,7 @@ const clipPath = () => userFile("kon-clipboard.json");
 function clipRead() { if (!clipList) { try { clipList = JSON.parse(fs.readFileSync(clipPath(), "utf8")); } catch { clipList = []; } } return clipList; }
 function clipSave() { try { fs.writeFileSync(clipPath(), JSON.stringify(clipList)); } catch {} }
 function looksSecret(t) {
-  const s = t.trim();
+  const s = String(t || "").trim();
   if (/^(sk-|sk_|pk_|rk_|AIza|ghp_|gho_|github_pat_|xox[abprs]-|glpat-|AKIA|ya29\.|eyJ[\w-]+\.[\w-]+\.)/.test(s)) return true;
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(s)) return true;
   const digits = s.replace(/[\s-]/g, "");
@@ -646,10 +657,15 @@ function looksSecret(t) {
   if (!/\s/.test(s) && s.length >= 12 && s.length <= 200 && !/^https?:\/\//.test(s) && /[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s) && (/[^\w]/.test(s) || s.length >= 24)) return true;
   return false;
 }
+function readClipText() {
+  try { const v = clipboard.readText(); return typeof v === "string" ? v : v == null ? "" : String(v); } catch { return ""; }
+}
 function clipTick() {
+  try { clipTickUnsafe(); } catch (e) { console.warn("clipboard", e?.message || e); }
+}
+function clipTickUnsafe() {
   if (readSettings().clipboardOn === false) return;
-  let t = "";
-  try { t = clipboard.readText(); } catch { return; }
+  const t = readClipText();
   if (!t || t === clipLast) return;
   clipLast = t;
   if (!t.trim() || t.length > 20000 || looksSecret(t)) return;
@@ -771,7 +787,7 @@ if (process.argv.includes("--remove-hooks")) {
     startClaudeServer();
     upgradeHooks();
     startUpdater();
-    clipLast = (() => { try { return clipboard.readText(); } catch { return ""; } })();
+    clipLast = readClipText();
     setInterval(clipTick, 800);
     // mantém a opção "Iniciar com o Windows" em sincronia com o que o instalador marcou
     try { const on = app.getLoginItemSettings().openAtLogin; if (on !== !!readSettings().autoStart) writeSettings({ autoStart: on }); } catch {}
