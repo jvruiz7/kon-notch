@@ -39,8 +39,13 @@ function listFiles(dir, since, acc = []) {
 
 // cache por arquivo: lê só o que foi acrescentado desde a última vez (transcripts podem ter centenas de MB)
 const fileCache = new Map();
-function parseLines(text, f, since, out) {
-  for (const line of text.split("\n")) {
+const tick = () => new Promise((r) => setImmediate(r));
+// lê em pedaços e devolve o controle ao Electron entre eles (históricos grandes não travam o Kon)
+async function parseLines(text, f, since, out) {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (i % 1500 === 1499) await tick();
+    const line = lines[i];
     if (!line.includes('"usage"')) continue;
     let o; try { o = JSON.parse(line); } catch { continue; }
     const msg = o.message;
@@ -59,18 +64,21 @@ function readRange(p, start, end) {
   const fd = fs.openSync(p, "r");
   try { const buf = Buffer.alloc(end - start); fs.readSync(fd, buf, 0, buf.length, start); return buf; } finally { fs.closeSync(fd); }
 }
-function parseFile(f, since) {
+async function parseFile(f, since) {
   let c = fileCache.get(f.p);
   if (c && c.size === f.size && c.mtime === f.mtime) return c.entries;
   if (!c || f.size < c.offset) c = { offset: 0, entries: [], rest: Buffer.alloc(0) };
   try {
-    if (f.size > c.offset) {
-      const chunk = Buffer.concat([c.rest, readRange(f.p, c.offset, f.size)]);
+    // lê em blocos de 8 MB para não carregar um histórico enorme de uma vez
+    while (c.offset < f.size) {
+      const end = Math.min(f.size, c.offset + 8 * 1024 * 1024);
+      const chunk = Buffer.concat([c.rest, readRange(f.p, c.offset, end)]);
       const lastNl = chunk.lastIndexOf(10);
       const complete = lastNl >= 0 ? chunk.subarray(0, lastNl) : Buffer.alloc(0);
       c.rest = lastNl >= 0 ? Buffer.from(chunk.subarray(lastNl + 1)) : chunk; // linha ainda sendo escrita
-      parseLines(complete.toString("utf8"), f, since, c.entries);
-      c.offset = f.size;
+      await parseLines(complete.toString("utf8"), f, since, c.entries);
+      c.offset = end;
+      await tick();
     }
   } catch { return c.entries; }
   c.entries = c.entries.filter((e) => e.t >= since);
@@ -81,17 +89,25 @@ function parseFile(f, since) {
 
 function startOfDay(t) { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); }
 
-function computeUsage({ plan = "auto", konTokens = {} } = {}) {
+let running = null;
+function computeUsage(opts) {
+  if (!running) running = computeUsageNow(opts).finally(() => { running = null; });
+  return running;
+}
+async function computeUsageNow({ plan = "auto", konTokens = {} } = {}) {
   const now = Date.now();
   const today0 = startOfDay(now);
   const since = today0 - 7 * DAY;
   const dirs = roots();
   const seen = new Set();
   const all = [];
-  for (const dir of dirs) for (const f of listFiles(dir, since)) for (const e of parseFile(f, since)) {
-    if (e.key !== ":" && seen.has(e.key)) continue;
-    seen.add(e.key);
-    all.push(e);
+  for (const dir of dirs) for (const f of listFiles(dir, since)) {
+    for (const e of await parseFile(f, since)) {
+      if (e.key !== ":" && seen.has(e.key)) continue;
+      seen.add(e.key);
+      all.push(e);
+    }
+    await tick();
   }
   all.sort((a, b) => a.t - b.t);
 

@@ -109,7 +109,7 @@ function writeSettings(patch) {
   fs.mkdirSync(app.getPath("userData"), { recursive: true });
   fs.writeFileSync(userFile("settings.json"), JSON.stringify(next, null, 2));
   settingsCache = next;
-  if ("autoStart" in patch) app.setLoginItemSettings({ openAtLogin: !!next.autoStart, path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath });
+  if ("autoStart" in patch) { app.setLoginItemSettings({ openAtLogin: !!next.autoStart, path: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath }); setImmediate(() => { try { buildTrayMenu(); } catch {} }); }
   return next;
 }
 function encryptKey(plain) {
@@ -189,6 +189,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       backgroundThrottling: false,
+      autoplayPolicy: "no-user-gesture-required", // os sons do Kon tocam mesmo sem um clique antes
     },
   });
   win.setAlwaysOnTop(true, "screen-saver");
@@ -339,7 +340,10 @@ function startHelper() {
         const p = pendingOcr.get(msg.id);
         if (p) { pendingOcr.delete(msg.id); msg.error ? p.reject(new Error(msg.error)) : p.resolve(msg.text || ""); }
       } else if (msg.type === "ready") { helperRestarts = 0; send("helper:ready", msg); applyWake(); }
-      else if (msg.type === "error") console.warn("[kon-helper]", msg.scope, msg.message);
+      else if (msg.type === "error") {
+        console.warn("[kon-helper]", msg.scope, msg.message);
+        try { fs.appendFileSync(userFile("kon-helper.log"), `${new Date().toISOString()} ${msg.scope}: ${msg.message}\n`); } catch {}
+      }
     }
   });
   helper.stderr.on("data", (d) => console.warn("[kon-helper:stderr]", String(d)));
@@ -370,8 +374,9 @@ function onForeground(m) {
 function applyFullscreen() {
   if (!win || win.isDestroyed()) return;
   const hide = fgState.full && readSettings().hideFullscreen !== false && pendingPerms.size === 0 && dueReminders === 0 && !pinned;
-  if (hide && !hiddenForFullscreen) { hiddenForFullscreen = true; win.hide(); }
-  else if (!hide && hiddenForFullscreen) { hiddenForFullscreen = false; win.showInactive(); }
+  // compara com a visibilidade real: um atalho pode ter mostrado o Kon por cima da tela cheia
+  if (hide) { if (win.isVisible()) { hiddenForFullscreen = true; win.hide(); } }
+  else if (hiddenForFullscreen) { hiddenForFullscreen = false; win.showInactive(); }
 }
 ipcMain.handle("fg:get", () => fgState);
 
@@ -653,10 +658,10 @@ ipcMain.handle("claude:hooks", (_e, action) => {
 function upgradeHooks() { try { const st = hooksState(readClaudeSettings()); if (st.any && !st.all) installHooks(); } catch {} }
 
 /* ═════════ Uso do Claude Code (transcripts locais) ═════════ */
-ipcMain.handle("usage:get", () => {
+ipcMain.handle("usage:get", async () => {
   try {
     let konTokens = {}; try { konTokens = JSON.parse(fs.readFileSync(userFile("kon-usage.json"), "utf8")); } catch {}
-    return computeUsage({ plan: readSettings().claudePlan, konTokens });
+    return await computeUsage({ plan: readSettings().claudePlan, konTokens });
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -774,7 +779,7 @@ ipcMain.handle("report:make", async (_e, { note = "", withShot = false } = {}) =
       ajustes: pub, nota: String(note).slice(0, 2000),
     };
     fs.writeFileSync(path.join(dir, "info.json"), JSON.stringify(info, null, 2));
-    for (const f of ["kon-error.log", "kon-update.log"]) { const t = tail(userFile(f), 400); if (t) fs.writeFileSync(path.join(dir, f), t); }
+    for (const f of ["kon-error.log", "kon-update.log", "kon-helper.log"]) { const t = tail(userFile(f), 400); if (t) fs.writeFileSync(path.join(dir, f), t); }
     if (withShot) {
       try {
         const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
@@ -1127,6 +1132,11 @@ function registerShortcuts() {
 function createTray() {
   tray = new Tray(nativeImage.createFromPath(path.join(__dirname, "tray.png")));
   tray.setToolTip("Kon");
+  buildTrayMenu();
+  tray.on("click", () => send("shortcut", "panel"));
+}
+function buildTrayMenu() {
+  if (!tray) return;
   const s = readSettings();
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "Perguntar ao Kon      Ctrl+Alt+Space", click: () => { focusKon(); send("shortcut", "ask"); } },
@@ -1137,12 +1147,11 @@ function createTray() {
     { label: "Configurações", click: () => { focusKon(); send("shortcut", "settings"); } },
     { label: "Relatar problema", click: () => { focusKon(); send("shortcut", "report"); } },
     { type: "separator" },
-    { label: "Iniciar com o Windows", type: "checkbox", checked: !!s.autoStart, click: (i) => writeSettings({ autoStart: i.checked }) },
+    { label: "Iniciar com o Windows", type: "checkbox", checked: !!s.autoStart, click: (i) => { writeSettings({ autoStart: i.checked }); send("settings:changed", publicSettings()); } },
     { label: "Recarregar", click: () => win?.reload() },
     { type: "separator" },
     { label: "Sair do Kon", click: () => app.quit() },
   ]));
-  tray.on("click", () => send("shortcut", "panel"));
 }
 
 /* ═════════ Ciclo de vida ═════════ */
@@ -1177,6 +1186,8 @@ if (process.argv.includes("--remove-hooks")) {
     screen.on("display-removed", replace);
   });
   app.on("before-quit", () => {
+    // pedidos de permissão segurados voltam na hora para o terminal
+    for (const id of [...pendingPerms.keys()]) { try { resolvePerm(id, null); } catch {} }
     // atualização pequena baixada e você fechou o Kon: aplica ao sair, sem reabrir
     if (updateInfo?.patch && !patchInstalling) { try { installPatch(false); } catch {} }
     app.isQuitting = true; try { helper?.stdin.end(); helper?.kill(); } catch {} });

@@ -90,6 +90,17 @@ jobs:
           if ((Test-Path $err) -and (Get-Item $err).Length -gt 0) { Fail 'o Kon registrou erros ao abrir' }
           try { $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47321/claude' -Method Post -Body '{"hook_event_name":"Stop"}' -TimeoutSec 5; if ($r.StatusCode -ne 200) { Fail 'servidor do Claude Code respondeu errado' } } catch { Fail "servidor do Claude Code não respondeu: $_" }
 
+          Write-Host '2b) código nativo do helper compila no PowerShell do Windows (mixer, Não incomodar, teclado, voz, processos)'
+          $cmds = Join-Path $env:RUNNER_TEMP 'helper-cmds.txt'
+          @('{"cmd":"mix","id":"1"}','{"cmd":"procs","id":"2"}','{"cmd":"dnd","id":"3"}','{"cmd":"wake","id":"5","on":false}') | Set-Content $cmds
+          $hout = Join-Path $env:RUNNER_TEMP 'helper-out.txt'
+          $hp = Start-Process powershell.exe -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $data 'kon-helper.ps1') -RedirectStandardInput $cmds -RedirectStandardOutput $hout -PassThru -WindowStyle Hidden
+          if (-not $hp.WaitForExit(90000)) { $hp.Kill(); Fail 'o helper não terminou com a entrada fechada' }
+          $txt = Get-Content $hout -Raw
+          Write-Host $txt
+          if ($txt -match 'error CS\d+') { Fail 'um bloco C# do helper não compila no Windows PowerShell' }
+          foreach ($t in '"type":"ready"','"type":"procs"','"type":"dnd"','"type":"wakeinfo"','"type":"mix"') { if ($txt -notmatch [regex]::Escape($t)) { Fail "o helper não respondeu: $t" } }
+
           Write-Host '3) atualização silenciosa com o Kon aberto (como faz o atualizador)'
           $p = Start-Process $setup -ArgumentList '--updated','/S','--force-run' -PassThru
           $p.WaitForExit(120000) | Out-Null

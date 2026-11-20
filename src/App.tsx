@@ -6,9 +6,9 @@ import {
   Plus, Minus, Moon, Lock, LockOpen, EyeOff, Settings, Search, Languages, X, Copy, Check,
   ChevronLeft, ChevronRight, ArrowLeftRight, Trash2, Pencil, KeyRound, ExternalLink, Power, Eye as EyeIcon, Music2,
   FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, FileArchive, FileCode, Folder,
-  Mic, Square, Globe, MapPin, Download, Bell, CheckCircle2, AlertTriangle,
-  Camera, Pin, PinOff, Zap, Cpu, HardDrive, MemoryStick, AppWindow, Link2, TerminalSquare, ClipboardList, Archive, Sparkles, Video, CalendarClock, RefreshCw, Paperclip, Terminal, ShieldCheck, Monitor, MousePointerClick,
-  Sun, Cloud, CloudSun, CloudMoon, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets, Wind, Sunrise, Sunset, Thermometer,
+  Mic, Square, Globe, MapPin, Download, Bell, AlertTriangle,
+  Camera, Pin, PinOff, Zap, HardDrive, MemoryStick, AppWindow, Link2, TerminalSquare, ClipboardList, Archive, Sparkles, Video, CalendarClock, RefreshCw, Paperclip, Terminal, ShieldCheck, Monitor, MousePointerClick,
+  Sun, Cloud, CloudSun, CloudMoon, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets, Wind, Thermometer,
 } from "lucide-react";
 import {
   ACCENTS, SPRING, FADE, COMPACT, PANEL_SIZE, PANEL_DEFAULT, PAGE_META, DEFAULT_ORDER, DURATION, STAGES, LYRICS,
@@ -16,7 +16,7 @@ import {
   BR_CITIES, wmo, toMin, cityNow, LANGS, TARGETS, INITIAL_TODOS, usePersist, glassBtn,
   detectLangLocal, translateLocal,
 } from "./data.js";
-import { Eyes, AlbumArt, Equalizer, Waveform, Seg, Ring, Ruler, Switch, PillBtn, PageRow } from "./ui.jsx";
+import { Eyes, AlbumArt, Waveform, Seg, Ring, Ruler, Switch, PillBtn, PageRow } from "./ui.jsx";
 import { KonTofu, KonTofuEating, OutfitContext, OUTFITS } from "./components/KonMascot";
 import { playSound, SOUND_PACKS } from "./sounds.js";
 import { bridge } from "./bridge.js";
@@ -197,7 +197,6 @@ export default function KonIsland() {
   const [privacy, setPrivacy] = usePersist("privacy", false);
 
   const [now, setNow] = useState(new Date());
-  const [showLyric, setShowLyric] = useState(true);
   const [weather, setWeather] = useState(null);
 
   const [waterLog, setWaterLog] = usePersist("water", { day: "", count: 0 });
@@ -278,7 +277,6 @@ export default function KonIsland() {
   const prevTrack = () => (REAL ? bridge.mediaCmd("prev") : setDPos(0));
 
   /* ─── Claude Code (hooks) ─── */
-  const claudeStatus = claude.status;
   const claudeRunning = claude.status === "working";
   const done = claude.status === "done";
   const claudeElapsed = claude.startedAt ? Math.max(0, Math.floor(((done ? claude.doneAt : now.getTime()) - claude.startedAt) / 1000)) : 0;
@@ -342,7 +340,7 @@ export default function KonIsland() {
   const flashSuccess = () => { setSuccess(true); setTimeout(() => setSuccess(false), 1300); };
 
   /* ─── Configurações ─── */
-  useEffect(() => { bridge.getSettings().then((st) => setSettings({ ...st, loaded: true })); }, []);
+  useEffect(() => { bridge.getSettings().then((st) => setSettings({ ...st, loaded: true })); return bridge.on("settings:changed", (st) => setSettings({ ...st, loaded: true })); }, []);
   const saveSettings = async (patch) => { setSettings((cur) => ({ ...cur, ...patch })); const st = await bridge.setSettings(patch); setSettings({ ...st, loaded: true }); };
   const saveKey = async (provider) => {
     const k = keyDraft[provider].trim();
@@ -388,12 +386,6 @@ export default function KonIsland() {
     const t = setTimeout(() => setSleepLeft((s) => (s === null ? null : s - 1)), 1000);
     return () => clearTimeout(t);
   }, [sleepLeft]);
-  useEffect(() => {
-    if (mode !== "music") return;
-    const t = setInterval(() => setShowLyric((v) => !v), 4000);
-    return () => clearInterval(t);
-  }, [mode]);
-
   /* ─── Mídia do Windows (GSMTC) ─── */
   /* Capa: a do Windows (exata) vence; enquanto ela não chega, a do catálogo entra em ~0,3 s.
      Capas já vistas ficam em memória, então voltar a uma música mostra a capa na hora. */
@@ -1078,7 +1070,6 @@ export default function KonIsland() {
   }, [view, adding, qForm]);
 
   const li = lyricLines && (REAL ? lyrics.synced : true) ? lyricAt(lyricLines, pos) : 0;
-  const currentLyric = lyricLines?.[li]?.text || `${trackTitle} — ${trackArtist}`;
   const lyricsView = lyricLines || [{ t: 0, text: REAL ? (lyrics.status === "loading" ? "Procurando a letra…" : media.active ? trackTitle : "Nada tocando") : "" }, { t: 1, text: REAL && media.active ? (lyrics.status === "loading" ? "" : "Sem letra sincronizada") : "" }];
   const stageIdx = done ? 4 : claudeRunning ? claude.stage : -1;
   const stageFrac = 0.55;
@@ -2539,7 +2530,7 @@ export default function KonIsland() {
       <div className="flex items-center gap-2.5 h-9 px-2.5 rounded-xl bg-white/[0.04]">
         <span className="text-[11.5px] font-medium shrink-0">Brilho</span>
         <input type="range" min="0" max="150" step="5" value={Math.round((settings.glow ?? 1) * 100)} onChange={(e) => setSettings((st) => ({ ...st, glow: +e.target.value / 100 }))}
-          onMouseUp={(e) => saveSettings({ glow: +e.currentTarget.value / 100 })} className="kon-range flex-1" />
+          onPointerUp={(e) => saveSettings({ glow: +e.currentTarget.value / 100 })} onKeyUp={(e) => saveSettings({ glow: +e.currentTarget.value / 100 })} className="kon-range flex-1" />
         <span className="w-9 text-right text-[10.5px] tabular-nums text-white/50">{Math.round((settings.glow ?? 1) * 100)}%</span>
       </div>
       {SwitchRow(Moon, "Não incomodar do Windows durante o Focus", "focusDnd", "silencia notificações enquanto o timer roda")}
@@ -2575,7 +2566,8 @@ export default function KonIsland() {
         <div className="flex items-center gap-2.5 h-9 px-2.5 rounded-xl bg-white/[0.04]">
           <span className="text-[11.5px] font-medium shrink-0">Volume</span>
           <input type="range" min="5" max="100" step="5" value={Math.round((settings.soundVol ?? 0.6) * 100)} onChange={(e) => setSettings((st) => ({ ...st, soundVol: +e.target.value / 100 }))}
-            onMouseUp={(e) => { const v = +e.currentTarget.value / 100; saveSettings({ soundVol: v }); playSound("attention", settings.soundPack || "retro", v); }} className="kon-range flex-1" />
+            onPointerUp={(e) => { const v = +e.currentTarget.value / 100; saveSettings({ soundVol: v }); playSound("attention", settings.soundPack || "retro", v); }}
+            onKeyUp={(e) => saveSettings({ soundVol: +e.currentTarget.value / 100 })} className="kon-range flex-1" />
           <span className="w-9 text-right text-[10.5px] tabular-nums text-white/50">{Math.round((settings.soundVol ?? 0.6) * 100)}%</span>
         </div>
       )}

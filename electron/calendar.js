@@ -90,7 +90,7 @@ function occurrences(ev, from, to) {
 async function fetchCalendar(url) {
   const u = String(url || "").trim().replace(/^webcals?:\/\//i, "https://");
   if (!/^https?:\/\//i.test(u)) throw new Error("Endereço ICS inválido");
-  const res = await fetch(u, { headers: { "User-Agent": "Kon" } });
+  const res = await fetch(u, { headers: { "User-Agent": "Kon" }, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`A agenda respondeu ${res.status}`);
   const text = await res.text();
   if (!text.includes("BEGIN:VCALENDAR")) throw new Error("Esse link não é um arquivo .ics");

@@ -100,8 +100,10 @@ public class KonFg {
 } catch { Emit @{ type = 'error'; scope = 'fg'; message = $_.Exception.Message } }
 
 # ───────── Saídas de áudio e volume por app (Core Audio) ─────────
-$mixOk = $false
-try {
+$script:mixOk = $null
+function Ensure-Mix {
+  if ($null -ne $script:mixOk) { return $script:mixOk }
+  try {
   Add-Type -Language CSharp -TypeDefinition @"
 using System;
 using System.Collections.Generic;
@@ -240,11 +242,13 @@ public class KonMix {
   }
 }
 "@
-  $mixOk = $true
-} catch { Emit @{ type = 'error'; scope = 'mix'; message = $_.Exception.Message } }
+    $script:mixOk = $true
+  } catch { $script:mixOk = $false; Emit @{ type = 'error'; scope = 'mix'; message = $_.Exception.Message } }
+  return $script:mixOk
+}
 
 function Invoke-Mix($c) {
-  if (-not $mixOk) { Emit @{ type = 'mix'; id = $c.id; ok = $false }; return }
+  if (-not (Ensure-Mix)) { Emit @{ type = 'mix'; id = $c.id; ok = $false }; return }
   try {
     if ($c.cmd -eq 'setdev') { [KonMix]::SetDefault([string]$c.value) }
     elseif ($c.cmd -eq 'appvol') { [KonMix]::SetApp([uint32[]]@($c.pids), [int]$c.volume, -1) }
@@ -265,8 +269,10 @@ function Invoke-Mix($c) {
 }
 
 # ───────── Não incomodar do Windows (Assistente de foco, via WNF) e processos ─────────
-$dndOk = $false
-try {
+$script:dndOk = $null
+function Ensure-Dnd {
+  if ($null -ne $script:dndOk) { return $script:dndOk }
+  try {
   Add-Type -Language CSharp -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -286,8 +292,10 @@ public class KonDnd {
   }
 }
 "@
-  $dndOk = $true
-} catch { Emit @{ type = 'error'; scope = 'dnd'; message = $_.Exception.Message } }
+    $script:dndOk = $true
+  } catch { $script:dndOk = $false; Emit @{ type = 'error'; scope = 'dnd'; message = $_.Exception.Message } }
+  return $script:dndOk
+}
 
 $script:procPrev = @{}
 $script:procAt = [DateTime]::UtcNow
@@ -315,8 +323,10 @@ function Invoke-Procs($c) {
 }
 
 # ───────── Palavra de ativação "Kon" (reconhecimento de voz do Windows, offline) ─────────
-$wakeOk = $false
-try {
+$script:wakeOk = $null
+function Ensure-Wake {
+  if ($null -ne $script:wakeOk) { return $script:wakeOk }
+  try {
   Add-Type -ReferencedAssemblies System.Speech -Language CSharp -TypeDefinition @"
 using System;
 using System.Globalization;
@@ -326,9 +336,9 @@ public class KonWake {
   static int hits;
   static float minConf = 0.6f;
   public static string Info() {
-    var list = new System.Collections.Generic.List<string>();
-    foreach (var r in SpeechRecognitionEngine.InstalledRecognizers()) list.Add(r.Culture.Name);
-    return string.Join(",", list.ToArray());
+    string all = "";
+    foreach (var r in SpeechRecognitionEngine.InstalledRecognizers()) all += (all.Length > 0 ? "," : "") + r.Culture.Name;
+    return all;
   }
   public static string Start(float conf) {
     Stop();
@@ -356,13 +366,17 @@ public class KonWake {
   public static int Poll() { int h = hits; hits = 0; return h; }
 }
 "@
-  $wakeOk = $true
-} catch { Emit @{ type = 'error'; scope = 'wake'; message = $_.Exception.Message } }
+    $script:wakeOk = $true
+  } catch { $script:wakeOk = $false; Emit @{ type = 'error'; scope = 'wake'; message = $_.Exception.Message } }
+  return $script:wakeOk
+}
 $script:wakeOn = $false
 
 # ───────── Teclado: copiar/colar no app em primeiro plano (ações no texto selecionado) ─────────
-$keysOk = $false
-try {
+$script:keysOk = $null
+function Ensure-Keys {
+  if ($null -ne $script:keysOk) { return $script:keysOk }
+  try {
   Add-Type -Language CSharp -TypeDefinition @"
 using System;
 using System.Threading;
@@ -387,8 +401,10 @@ public class KonKeys {
   }
 }
 "@
-  $keysOk = $true
-} catch { Emit @{ type = 'error'; scope = 'keys'; message = $_.Exception.Message } }
+    $script:keysOk = $true
+  } catch { $script:keysOk = $false; Emit @{ type = 'error'; scope = 'keys'; message = $_.Exception.Message } }
+  return $script:keysOk
+}
 
 # ───────── Microfone / câmera em uso (ConsentStore do Windows) ─────────
 function Get-InUse($cap) {
@@ -556,7 +572,7 @@ function Invoke-Cmd($c) {
   if (@('mix', 'setdev', 'appvol', 'appmute') -contains $c.cmd) { Invoke-Mix $c; return }
   if ($c.cmd -eq 'procs') { Invoke-Procs $c; return }
   if ($c.cmd -eq 'wake') {
-    if (-not $wakeOk) { Emit @{ type = 'wakeinfo'; id = $c.id; ok = $false; error = 'O reconhecimento de voz do Windows não está disponível' }; return }
+    if (-not (Ensure-Wake)) { Emit @{ type = 'wakeinfo'; id = $c.id; ok = $false; error = 'O reconhecimento de voz do Windows não está disponível' }; return }
     try {
       if ($c.on) { $r = [KonWake]::Start([float]$c.conf); $script:wakeOn = $r.StartsWith('ok'); Emit @{ type = 'wakeinfo'; id = $c.id; ok = $script:wakeOn; result = $r; recognizers = [KonWake]::Info() } }
       else { [KonWake]::Stop(); $script:wakeOn = $false; Emit @{ type = 'wakeinfo'; id = $c.id; ok = $true } }
@@ -564,14 +580,16 @@ function Invoke-Cmd($c) {
     return
   }
   if ($c.cmd -eq 'dnd') {
-    if (-not $dndOk) { Emit @{ type = 'dnd'; id = $c.id; ok = $false }; return }
-    $prev = [KonDnd]::Get(); $ok = $true
-    if ($null -ne $c.mode) { $ok = [KonDnd]::Set([int]$c.mode) }
-    Emit @{ type = 'dnd'; id = $c.id; ok = $ok; prev = $prev; now = [KonDnd]::Get() }
+    if (-not (Ensure-Dnd)) { Emit @{ type = 'dnd'; id = $c.id; ok = $false }; return }
+    try {
+      $prev = [KonDnd]::Get(); $ok = $true
+      if ($null -ne $c.mode) { $ok = [KonDnd]::Set([int]$c.mode) }
+      Emit @{ type = 'dnd'; id = $c.id; ok = $ok; prev = $prev; now = [KonDnd]::Get() }
+    } catch { Emit @{ type = 'dnd'; id = $c.id; ok = $false; error = $_.Exception.Message } }
     return
   }
   if ($c.cmd -eq 'copysel' -or $c.cmd -eq 'paste') {
-    if (-not $keysOk) { Emit @{ type = 'keys'; id = $c.id; ok = $false }; return }
+    if (-not (Ensure-Keys)) { Emit @{ type = 'keys'; id = $c.id; ok = $false }; return }
     try {
       [KonKeys]::WaitModifiers(1200)
       if ($c.cmd -eq 'copysel') { [KonKeys]::Ctrl(0x43) } else { [KonKeys]::Ctrl(0x56) }

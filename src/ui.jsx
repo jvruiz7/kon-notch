@@ -1,5 +1,5 @@
 import React from "react";
-import { motion, AnimatePresence, Reorder, useDragControls } from "framer-motion";
+import { motion, Reorder, useDragControls } from "framer-motion";
 import { GripHorizontal } from "lucide-react";
 import { SPRING, PAGE_META } from "./data.js";
 import { KonTofu } from "./components/KonMascot";
