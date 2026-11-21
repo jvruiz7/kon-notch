@@ -89,3 +89,4 @@ pub const VIDEO: char = '\u{e1a5}';
 pub const PAPERCLIP: char = '\u{e12d}';
 pub const SCAN_TEXT: char = '\u{e538}';
 pub const SPARKLES: char = '\u{e412}';
+pub const ARCHIVE: char = '\u{e041}';

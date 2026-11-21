@@ -35,6 +35,7 @@ jobs:
       - name: Abre o Kon nativo por 15 s (não pode fechar sozinho)
         shell: pwsh
         run: |
+          $env:KON_PORTABLE = '1'
           $p = Start-Process target\release\kon.exe -PassThru
           Start-Sleep 15
           if ($p.HasExited) {
@@ -49,11 +50,13 @@ jobs:
           Write-Host "Memória: $mb MB · tamanho do exe: $kb KB"
           "MEM=$mb" >> $env:GITHUB_ENV; "SIZE=$kb" >> $env:GITHUB_ENV
           Stop-Process -Id $p.Id -Force
-      - name: Publica como pré-versão (não afeta as atualizações do Kon)
+      - name: Publica a versão (o Kon instalado se atualiza sozinho)
         if: contains(github.event.head_commit.message, '[publicar]')
         shell: pwsh
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          $tag = "nativo-" + (Get-Date -Format 'yyyyMMdd-HHmm')
-          Copy-Item target\release\kon.exe "Kon-nativo.exe"
-          gh release create $tag "Kon-nativo.exe" --prerelease --title "Kon nativo (testes) $tag" --notes "Versão nativa em Rust, para testes. Memória: $env:MEM MB · exe: $env:SIZE KB. Não substitui o Kon instalado: rode o .exe direto."
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $tag = "nativo-v$v"
+          Copy-Item target\release\kon.exe "Kon.exe"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) { gh release upload $tag "Kon.exe" --clobber } else { gh release create $tag "Kon.exe" --title "Kon $v" --notes "Kon $v (Rust nativo). Baixe o Kon.exe e abra: ele se instala sozinho e se atualiza pelas próximas versões. Memória: $env:MEM MB · exe: $env:SIZE KB." }

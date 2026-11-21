@@ -193,6 +193,65 @@ mod imp {
         }
     }
 
+    /// Põe uma janela nossa (pelo título) exatamente sobre um retângulo em pixels físicos, no topo e com foco.
+    pub fn cover_rect(title: &str, x: i32, y: i32, w: i32, h: i32) -> bool {
+        let t: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            match FindWindowW(None, windows::core::PCWSTR(t.as_ptr())) {
+                Ok(h2) => { let _ = SetWindowPos(h2, Some(HWND_TOPMOST), x, y, w, h, SWP_SHOWWINDOW); let _ = SetForegroundWindow(h2); true }
+                Err(_) => false,
+            }
+        }
+    }
+
+    /// Ditado em português (Windows.Media.SpeechRecognition): ouve uma frase e devolve o texto.
+    pub fn dictate() -> Result<String, String> {
+        use windows::Media::SpeechRecognition::{SpeechRecognizer, SpeechRecognitionResultStatus};
+        use windows::Globalization::Language;
+        unsafe { let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED); }
+        let msg = |e: windows::core::Error| -> String {
+            match e.code().0 as u32 {
+                0x80045509 => "Ative \"Reconhecimento de fala online\" em Configurações > Privacidade > Fala".into(),
+                0x80070005 => "O Windows bloqueou o microfone: libere em Configurações > Privacidade > Microfone".into(),
+                0x8004503A => "Nenhum microfone encontrado".into(),
+                _ => format!("Não consegui ouvir ({})", e.message()),
+            }
+        };
+        let rec = Language::CreateLanguage(&windows::core::HSTRING::from("pt-BR")).and_then(|l| SpeechRecognizer::Create(&l)).or_else(|_| SpeechRecognizer::new()).map_err(msg)?;
+        let _ = rec.Timeouts().and_then(|t| { t.SetInitialSilenceTimeout(windows::Foundation::TimeSpan { Duration: 60_000_000 })?; t.SetEndSilenceTimeout(windows::Foundation::TimeSpan { Duration: 12_000_000 }) });
+        rec.CompileConstraintsAsync().map_err(msg)?.get().map_err(msg)?;
+        let r = rec.RecognizeAsync().map_err(msg)?.get().map_err(msg)?;
+        let ok = r.Status().map(|s| s == SpeechRecognitionResultStatus::Success).unwrap_or(false);
+        if !ok { return Err("Não entendi: tente de novo, mais perto do microfone".into()); }
+        Ok(r.Text().map(|t| t.to_string()).unwrap_or_default())
+    }
+
+    /// OCR nativo do Windows (Windows.Media.Ocr): português do Brasil se instalado, senão os idiomas do usuário.
+    pub fn ocr(w: u32, h: u32, rgba: &[u8]) -> Result<String, String> {
+        use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
+        use windows::Media::Ocr::OcrEngine;
+        use windows::Storage::Streams::DataWriter;
+        use windows::Globalization::Language;
+        let e = |x: windows::core::Error| x.message().to_string();
+        unsafe { let _ = windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED); }
+        let mut bgra = rgba.to_vec();
+        for p in bgra.chunks_exact_mut(4) { p.swap(0, 2); p[3] = 255; }
+        let dw = DataWriter::new().map_err(e)?;
+        dw.WriteBytes(&bgra).map_err(e)?;
+        let buf = dw.DetachBuffer().map_err(e)?;
+        let bmp = SoftwareBitmap::CreateCopyWithAlphaFromBuffer(&buf, BitmapPixelFormat::Bgra8, w as i32, h as i32, BitmapAlphaMode::Premultiplied).map_err(e)?;
+        let engine = Language::CreateLanguage(&windows::core::HSTRING::from("pt-BR")).ok()
+            .filter(|l| OcrEngine::IsLanguageSupported(l).unwrap_or(false))
+            .and_then(|l| OcrEngine::TryCreateFromLanguage(&l).ok())
+            .or_else(|| OcrEngine::TryCreateFromUserProfileLanguages().ok())
+            .ok_or_else(|| "Nenhum idioma de OCR instalado no Windows (Configurações > Idioma > adicionar Português (Brasil))".to_string())?;
+        let res = engine.RecognizeAsync(&bmp).map_err(e)?.get().map_err(e)?;
+        let lines = res.Lines().map_err(e)?;
+        let mut out = vec![];
+        for i in 0..lines.Size().map_err(e)? { if let Ok(l) = lines.GetAt(i) { out.push(l.Text().map(|t| t.to_string()).unwrap_or_default()); } }
+        Ok(out.join("\n"))
+    }
+
     /// Esconde o Kon da barra de tarefas e do Alt+Tab, e o mantém acima de tudo.
     pub fn make_tool_window() {
         if let Some(h) = hwnd() {
@@ -237,7 +296,20 @@ mod imp {
     pub fn set_visible(_on: bool) {}
     pub fn set_autostart(_on: bool) -> bool { false }
     pub fn master_volume() -> Option<(u32, bool)> { None }
-    pub fn capture_screen() -> Option<(u32, u32, Vec<u8>, i32, i32)> { None }
+    pub fn capture_screen() -> Option<(u32, u32, Vec<u8>, i32, i32)> {
+        // Linux (testes): uma imagem sintética para exercitar o recorte
+        if std::env::var("KON_OCR_FAKE").is_err() { return None; }
+        let (w, h) = (1280u32, 720u32);
+        let mut v = vec![0u8; (w * h * 4) as usize];
+        for (i, p) in v.chunks_exact_mut(4).enumerate() { let x = (i as u32 % w) as u8; p.copy_from_slice(&[30 + x / 8, 40, 70, 255]); }
+        Some((w, h, v, 0, 0))
+    }
+    pub fn dictate() -> Result<String, String> { Err("O ditado só funciona no Windows".into()) }
+    pub fn cover_rect(_t: &str, _x: i32, _y: i32, _w: i32, _h: i32) -> bool { false }
+    pub fn ocr(_w: u32, _h: u32, _rgba: &[u8]) -> Result<String, String> {
+        if std::env::var("KON_OCR_FAKE").is_ok() { return Ok("Texto de teste lido pelo OCR\nsegunda linha".into()); }
+        Err("O OCR nativo só funciona no Windows 10/11".into())
+    }
     pub fn set_focusable(_on: bool) {}
     pub fn data_dir() -> std::path::PathBuf { std::env::temp_dir().join("kon-nativo") }
 }

@@ -10,6 +10,7 @@ use crate::weather::{self, Weather};
 use crate::system::{self, SysInfo};
 use crate::clipboard;
 use crate::ai;
+use crate::calc;
 use crate::hotkeys::{self, Hot};
 use crate::secrets;
 use crate::report;
@@ -42,7 +43,7 @@ const DAYS: [&str; 7] = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum View { Compact, Panel, Perm, Sheet, Ask, Translate, TextAct, Remind }
+enum View { Compact, Panel, Perm, Sheet, Ask, Translate, TextAct, Remind, Ocr, Drop }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Sleep, Lock, Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
@@ -75,6 +76,12 @@ impl Spring {
 #[derive(Clone, Default)]
 struct Tr { text: String, src: String, tgt: String, out: Option<String>, detected: Option<String>, status: u8, engine: String, req: u64, edited: Option<Instant>, sent: String }
 // status: 0 parado, 1 traduzindo, 2 pronto, 3 erro
+/// Smart OCR: a foto da tela (sem o Kon) e o recorte que você está arrastando.
+struct OcrShot { w: u32, h: u32, rgba: Vec<u8>, mx: i32, my: i32, tex: Option<egui::TextureHandle>, start: Option<Pos2>, sel: Option<Rect>, frames: u32 }
+#[derive(Clone)]
+struct AskFile { path: std::path::PathBuf, name: String, screen: bool, sent: bool }
+#[derive(Clone, Default)]
+struct OcrRes { reading: bool, text: String, error: String, copied: bool }
 #[derive(Clone, Default)]
 struct TextAct { text: String, error: String, action: String, status: u8, result: String, req: u64 }
 // status: 0 escolhendo, 1 trabalhando, 2 pronto, 3 erro
@@ -168,6 +175,16 @@ pub struct KonApp {
     adding: Option<String>,
     editing: bool,
     focusable: bool,
+    ocr_shot: Option<OcrShot>,
+    ocr: Arc<Mutex<OcrRes>>,
+    ocr_q: String,
+    ask_file: Option<AskFile>,
+    dict: Arc<Mutex<(bool, Option<Result<String, String>>, u64)>>,
+    rates: calc::SharedRates,
+    drop_zone: u8,
+    drop_prev: Option<View>,
+    drop_rects: [Rect; 3],
+    zip_res: Arc<Mutex<Option<Result<std::path::PathBuf, String>>>>,
     _tray: Option<tray::Tray>,
     quit: bool,
 }
@@ -196,7 +213,7 @@ impl KonApp {
             page: Page::from(&std::env::var("KON_PAGE").unwrap_or_else(|_| settings.page.clone())),
             settings, media,
             // KON_DEMO=painel abre já com o painel (só para capturas de teste)
-            view: match std::env::var("KON_DEMO").as_deref() { Ok("painel") => View::Panel, Ok("traduzir") => View::Translate, Ok("texto") => View::TextAct, Ok("ajustes") => View::Sheet, Ok("perguntar") => View::Ask, _ => View::Compact },
+            view: match std::env::var("KON_DEMO").as_deref() { Ok("painel") => View::Panel, Ok("traduzir") => View::Translate, Ok("texto") => View::TextAct, Ok("ajustes") => View::Sheet, Ok("perguntar") => View::Ask, Ok("soltar") => View::Drop, _ => View::Compact },
             w: Spring::new(COMPACT.x), h: Spring::new(COMPACT.y),
             hit, passthrough: true,
             hover_since: None, leave_since: None,
@@ -204,7 +221,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, loc, cal_month: false, tasks: Tasks::load(), sys, sys_on, art: None, art_color: None, lyr: lyrics::new(), lyr_y: 0.0, success_at: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_tab: if std::env::var("KON_SHEET").as_deref() == Ok("pages") { 1 } else { 0 }, show_key: false, loc_menu: false, ics_in: None, vol_dragging: false, report_state: 0, report_note: String::new(), report_shot: false, report_result: None, ob_step: 0, cal: Arc::new(Mutex::new(calendar::State::default())), cal_ctx: cc.egui_ctx.clone(), upd: updater::new(), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), dismissed: vec![], meeting_sounded: None, key_sounded: false, fg: start_fg_watch(cc.egui_ctx.clone()), hud_at: None, vol_seen: None, perm_count: 0, dnd_prev: None, hidden: false, capture_applied: None, rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, loc, cal_month: false, tasks: Tasks::load(), sys, sys_on, art: None, art_color: None, lyr: lyrics::new(), lyr_y: 0.0, success_at: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_tab: if std::env::var("KON_SHEET").as_deref() == Ok("pages") { 1 } else { 0 }, show_key: false, loc_menu: false, ics_in: None, vol_dragging: false, report_state: 0, report_note: String::new(), report_shot: false, report_result: None, ob_step: 0, cal: Arc::new(Mutex::new(calendar::State::default())), cal_ctx: cc.egui_ctx.clone(), upd: updater::new(), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: std::env::var("KON_Q").unwrap_or_default(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), dismissed: vec![], meeting_sounded: None, key_sounded: false, fg: start_fg_watch(cc.egui_ctx.clone()), hud_at: None, vol_seen: None, perm_count: 0, dnd_prev: None, hidden: false, capture_applied: None, rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false, ocr_shot: None, ocr: Arc::new(Mutex::new(OcrRes::default())), ocr_q: String::new(), ask_file: None, dict: Arc::new(Mutex::new((false, None, 0))), rates: calc::rates_new(), drop_zone: 0, drop_prev: None, drop_rects: [Rect::NOTHING; 3], zip_res: Arc::new(Mutex::new(None)),
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -221,6 +238,15 @@ impl KonApp {
             View::Sheet => vec2(440.0, 470.0),
             View::Translate => vec2(560.0, 250.0),
             View::Remind => vec2(470.0, 84.0),
+            View::Drop => vec2(470.0, 112.0),
+            View::Ocr => {
+                let o = self.ocr.lock().unwrap();
+                if o.reading { vec2(280.0, 44.0) } else {
+                    let src = if o.error.is_empty() { o.text.as_str() } else { o.error.as_str() };
+                    let lines: usize = src.lines().map(|l| ((l.chars().count() as f32 / 62.0).ceil() as usize).max(1)).sum::<usize>().max(1);
+                    vec2(540.0, 46.0 + 42.0 + (lines as f32 * 21.0 + 20.0).min(180.0))
+                }
+            }
             View::TextAct => {
                 let t = self.ta.lock().unwrap();
                 vec2(540.0, if !t.error.is_empty() { 52.0 } else { match t.status { 0 => 98.0, 1 => 120.0, _ => (128.0 + ((t.result.chars().count() as f32 / 70.0).ceil() + t.result.matches('\n').count() as f32).min(6.0) * 18.0).min(250.0) } })
@@ -289,10 +315,12 @@ impl eframe::App for KonApp {
                 if std::env::args().any(|a| a == "--atualizado") { updater::cleanup(); self.toast(&format!("Kon atualizado para {}", env!("CARGO_PKG_VERSION"))); }
                 if !self.settings.onboarded && std::env::var("KON_DEMO").is_err() { self.view = View::Sheet; self.sheet_tab = 2; self.ob_step = 0; }
                 crate::platform::set_autostart(self.settings.auto_start);
+                if std::env::var("KON_DEMO").as_deref() == Ok("ocr") { self.start_ocr(ctx); }
                 self.placed = true;
             }
         }
-        if let Some(t) = &self._tray { for a in t.poll() { match a { tray::Action::Open => { self.view = View::Panel; } tray::Action::Quit => { self.quit = true; } } } }
+        if let Some(t) = &self._tray { for a in t.poll() { match a { tray::Action::Open => { self.view = View::Panel; } tray::Action::Ocr => self.start_ocr(ctx), tray::Action::Update => self.check_update(true), tray::Action::Quit => { self.quit = true; } } } }
+        self.ocr_overlay(ctx);
         if self.quit { ctx.send_viewport_cmd(egui::ViewportCommand::Close); return; }
 
         let m = self.media.snapshot();
@@ -355,13 +383,42 @@ impl eframe::App for KonApp {
         if !self.settings.ics_url.is_empty() { self.cal_refresh(false); }
         // arquivos arrastados até a ilha: abre a gaveta e guarda ao soltar
         let (hovering_files, dropped) = ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>()));
-        if hovering_files && self.page != Page::Files { self.drop_back = Some(self.page); self.page = Page::Files; self.view = View::Panel; self.stash.refresh_missing(); }
+        // arquivos arrastados até a ilha: três zonas (Guardar · Perguntar à IA · Compactar), como no Kon atual
+        if hovering_files {
+            if self.view != View::Drop { self.drop_prev = Some(self.view); self.view = View::Drop; self.drop_zone = 0; }
+            let ppp = ctx.pixels_per_point();
+            let pt = crate::platform::cursor_in_window().map(|(x, y)| pos2(x as f32 / ppp, y as f32 / ppp)).or_else(|| ctx.input(|i| i.pointer.hover_pos()));
+            if let Some(pt) = pt { if let Some(z) = self.drop_rects.iter().position(|r| r.contains(pt)) { self.drop_zone = z as u8; } }
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
         if !dropped.is_empty() {
-            let n = self.stash.add(&dropped);
-            if n > 0 { self.sfx("file"); }
-            self.page = Page::Files; self.view = View::Panel; self.drop_back = None;
-            self.toast(&match n { 0 => "Já estava guardado".to_string(), 1 => "1 item guardado".into(), k => format!("{k} itens guardados") });
-        } else if !hovering_files { if let Some(b) = self.drop_back.take() { if self.page == Page::Files { self.page = b; } } }
+            let zone = self.drop_zone;
+            self.view = match self.drop_prev.take() { Some(View::Drop) | None => View::Compact, Some(v) => v };
+            self.drop_zone = 0;
+            match zone {
+                1 => {
+                    // você escolheu enviar: só agora o arquivo é lido, e só para a IA selecionada
+                    self.open_ask();
+                    let p0 = dropped[0].clone();
+                    self.ask_file = Some(AskFile { name: p0.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), path: p0, screen: false, sent: false });
+                    if dropped.len() > 1 { self.toast("Anexei só o primeiro arquivo"); }
+                }
+                2 => { self.toast("Compactando…"); self.sfx("file"); zip_files(dropped, self.zip_res.clone(), ctx.clone()); }
+                _ => {
+                    let n = self.stash.add(&dropped);
+                    if n > 0 { self.sfx("file"); self.success_at = Some(Instant::now()); }
+                    let first = self.stash.list.first().map(|i| i.name.clone()).unwrap_or_default();
+                    self.toast(&match n { 0 => "Esses itens já estavam na ilha".to_string(), 1 => format!("Guardado na ilha: {first}"), k => format!("{k} itens guardados na ilha") });
+                }
+            }
+        } else if !hovering_files && self.view == View::Drop && std::env::var("KON_DEMO").as_deref() != Ok("soltar") { self.view = match self.drop_prev.take() { Some(View::Drop) | None => View::Compact, Some(v) => v }; }
+        let zr = self.zip_res.lock().unwrap().take();
+        if let Some(r) = zr {
+            match r {
+                Ok(p) => { self.stash.add(&[p.clone()]); self.success_at = Some(Instant::now()); self.toast(&format!("Compactado: {}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())); }
+                Err(e) => self.toast_err(&e),
+            }
+        }
         // abrir ao passar o mouse (com um respiro de 90 ms) e fechar ao sair (280 ms de tolerância)
         if inside {
             self.leave_since = None;
@@ -388,6 +445,7 @@ impl eframe::App for KonApp {
                 Hot::Panel => { self.view = if self.view == View::Panel { View::Compact } else { View::Panel }; }
                 Hot::Clip => { self.page = Page::Clip; self.view = View::Panel; }
                 Hot::Text => self.grab_selection(ctx),
+                Hot::Ocr => self.start_ocr(ctx),
             }
         }
         // terminou de responder: soma os tokens do chat do Kon e guarda o modelo que funcionou
@@ -396,7 +454,7 @@ impl eframe::App for KonApp {
             if g.phase == ai::Phase::Done && g.tokens > 0 { ai::add_kon_tokens(g.tokens); g.tokens = 0; }
             if let Some(m) = g.new_model.take() { self.settings.gemini_model = m; self.settings.save(); }
         }
-        let want_focus = ((self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel) || self.view == View::Sheet || self.view == View::Ask || self.view == View::Translate;
+        let want_focus = ((self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel) || self.view == View::Sheet || self.view == View::Ask || self.view == View::Translate || (self.view == View::Ocr && !self.ocr.lock().unwrap().reading);
         if want_focus != self.focusable { self.focusable = want_focus; crate::platform::set_focusable(want_focus); }
         if self.view == View::Compact { self.adding = None; self.editing = false; self.qform = None; self.qedit = false; }
         // aviso de PC sobrecarregado vindo da thread do sistema
@@ -425,7 +483,7 @@ impl eframe::App for KonApp {
             if look.processing { ui.ctx().request_repaint_after(Duration::from_millis(50)); }
             draw_island(ui.painter(), rect, self.view, &look);
             let open = ((self.h.v - COMPACT.y) / (PANEL.y - COMPACT.y)).clamp(0.0, 1.0);
-            if self.view == View::Remind {}
+            if self.view == View::Remind || self.view == View::Ocr || self.view == View::Drop {}
             else if self.view == View::Perm || (self.w.v > 400.0 && self.h.v < 120.0) {
                 let a = ((self.h.v - COMPACT.y) / (100.0 - COMPACT.y)).clamp(0.0, 1.0);
                 if self.view == View::Perm && a > 0.6 { self.draw_perm(ui, rect, blink, (a - 0.6) / 0.4); }
@@ -435,6 +493,8 @@ impl eframe::App for KonApp {
             if self.view == View::Remind { if self.h.v > 60.0 { self.draw_remind(ui, rect, blink); } }
             else if self.view == View::Translate { self.draw_translate(ui, rect, blink); }
             else if self.view == View::TextAct { self.draw_textact(ui, rect, blink); }
+            else if self.view == View::Ocr { self.draw_ocr(ui, rect, blink); }
+            else if self.view == View::Drop { self.draw_drop(ui, rect, blink); }
             else if self.view == View::Ask {
                 self.draw_ask(ui, rect, blink);
             } else if self.view == View::Sheet {
@@ -1039,7 +1099,7 @@ impl KonApp {
         }
     }
 
-    fn floating(&self) -> bool { matches!(self.view, View::Ask | View::Translate | View::TextAct) }
+    fn floating(&self) -> bool { matches!(self.view, View::Ask | View::Translate | View::TextAct | View::Ocr) }
 
     /// IA para pedidos únicos: a escolhida, ou a que tiver chave.
     fn once_req(&self, system: &str) -> Option<ai::Req> {
@@ -1294,8 +1354,40 @@ impl KonApp {
 
     fn open_ask(&mut self) {
         ai::cancel(&self.ask);
-        self.ask_q.clear(); self.ask_rows = 0.0;
+        self.ask_q.clear(); self.ask_rows = 0.0; self.ask_file = None;
         self.view = View::Ask;
+    }
+    /// "Perguntar sobre a tela": foto do monitor (sem o Kon) anexada à próxima pergunta.
+    fn ask_screen(&mut self) {
+        crate::platform::exclude_from_capture(true);
+        let shot = crate::platform::capture_screen();
+        crate::platform::exclude_from_capture(self.settings.hide_in_capture);
+        self.capture_applied = Some(self.settings.hide_in_capture);
+        let Some((w, h, rgba, _, _)) = shot else { self.toast_err("Não consegui capturar a tela"); return };
+        let dir = crate::platform::data_dir().join("telas");
+        let _ = std::fs::create_dir_all(&dir);
+        // guarda só as últimas capturas
+        if let Ok(rd) = std::fs::read_dir(&dir) { let mut v: Vec<_> = rd.flatten().map(|e| e.path()).collect(); v.sort(); while v.len() > 4 { let _ = std::fs::remove_file(v.remove(0)); } }
+        let path = dir.join(format!("tela-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        // a IA não precisa da resolução inteira: reduz para no máximo 1600 px de largura
+        let saved = image::RgbaImage::from_raw(w, h, rgba).map(|im| if w > 1600 { image::imageops::resize(&im, 1600, (h as f32 * 1600.0 / w as f32) as u32, image::imageops::FilterType::Triangle) } else { im })
+            .map(|im| image::DynamicImage::ImageRgba8(im).to_rgb8().save(&path).is_ok()).unwrap_or(false);
+        if !saved { self.toast_err("Não consegui capturar a tela"); return; }
+        self.ask_file = Some(AskFile { path, name: "Tela".into(), screen: true, sent: false });
+    }
+    fn toggle_dictation(&mut self, ctx: &egui::Context) {
+        let mut g = self.dict.lock().unwrap();
+        if g.0 { g.0 = false; g.2 += 1; return; } // para: ignora o que vier
+        g.0 = true; g.2 += 1; let id = g.2;
+        drop(g);
+        let st = self.dict.clone(); let c = ctx.clone();
+        std::thread::spawn(move || {
+            let r = crate::platform::dictate();
+            let mut g = st.lock().unwrap();
+            if g.2 == id { g.0 = false; g.1 = Some(r); }
+            drop(g); c.request_repaint();
+        });
+        ctx.request_repaint_after(Duration::from_millis(100));
     }
     fn key_for(&self, provider: &str) -> String {
         secrets::unprotect(if provider == "claude" { &self.settings.anthropic_key_enc } else { &self.settings.gemini_key_enc })
@@ -1304,6 +1396,12 @@ impl KonApp {
         let q = self.ask_q.trim().to_string();
         if q.is_empty() { return; }
         self.ask_q.clear();
+        let file = self.ask_file.as_mut().filter(|f| !f.sent).map(|f| { f.sent = true; f.path.clone() });
+        if file.is_some() {
+            let req = self.ask_req(); let c = ctx.clone();
+            ai::ask_with(&self.ask, q, None, file, req, move || c.request_repaint());
+            return;
+        }
         if let Some((text, at)) = reminders::parse(&q, chrono::Local::now()) {
             let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
             self.rems.push(Rem { id, text: text.chars().take(200).collect(), at, fired: false });
@@ -1313,10 +1411,224 @@ impl KonApp {
             *g = ai::Ask { id: n, phase: ai::Phase::Done, question: q, answer: format!("Combinado: {} eu te aviso no notch.\n{text}", reminders::describe(at, chrono::Local::now())), ..Default::default() };
             return;
         }
-        let pv = self.settings.provider.clone();
-        let req = ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: pv == "gemini" && self.settings.web_search, provider: pv, system: ai::SYSTEM.into() };
+        let req = self.ask_req();
         let c = ctx.clone();
         ai::ask(&self.ask, q, req, move || c.request_repaint());
+    }
+    fn ask_req(&self) -> ai::Req {
+        let pv = self.settings.provider.clone();
+        ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: pv == "gemini" && self.settings.web_search, provider: pv, system: ai::SYSTEM.into() }
+    }
+
+    /* ───────── Smart OCR (Ctrl+Alt+T) ───────── */
+    fn start_ocr(&mut self, ctx: &egui::Context) {
+        if self.ocr_shot.is_some() { return; }
+        // a foto sai sem o Kon (fora da captura só durante a foto) e do monitor onde está o mouse
+        crate::platform::exclude_from_capture(true);
+        let shot = crate::platform::capture_screen();
+        crate::platform::exclude_from_capture(self.settings.hide_in_capture);
+        self.capture_applied = Some(self.settings.hide_in_capture);
+        match shot {
+            None => self.toast_err("Não consegui capturar a tela"),
+            Some((w, h, rgba, mx, my)) => {
+                if matches!(self.view, View::Ask | View::Translate | View::TextAct | View::Ocr | View::Sheet) { self.view = View::Compact; }
+                self.ocr_shot = Some(OcrShot { w, h, rgba, mx, my, tex: None, start: None, sel: None, frames: 0 });
+                // a foto já está sem o Kon; enquanto recorta, a ilha some para não ficar por cima do recorte
+                crate::platform::set_visible(false);
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// A janela de recorte: cobre o monitor inteiro com a foto da tela e deixa arrastar um retângulo.
+    fn ocr_overlay(&mut self, ctx: &egui::Context) {
+        let Some(shot) = self.ocr_shot.as_mut() else { return };
+        let scale = ctx.pixels_per_point();
+        let vb = egui::ViewportBuilder::default().with_title("Kon OCR").with_decorations(false).with_always_on_top().with_taskbar(false).with_resizable(false)
+            .with_position([shot.mx as f32 / scale, shot.my as f32 / scale]).with_inner_size([shot.w as f32 / scale, shot.h as f32 / scale]);
+        // 0 = continua, 1 = cancelou, 2 = recortou
+        let out = ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("kon-ocr"), vb, |c, _| -> (u8, Option<(u32, u32, Vec<u8>)>) {
+            // o monitor pode ter outra escala: a posição exata em pixels físicos vem do Windows
+            if shot.frames < 8 { crate::platform::cover_rect("Kon OCR", shot.mx, shot.my, shot.w as i32, shot.h as i32); shot.frames += 1; c.request_repaint(); }
+            if shot.tex.is_none() {
+                let img = egui::ColorImage::from_rgba_unmultiplied([shot.w as usize, shot.h as usize], &shot.rgba);
+                shot.tex = Some(c.load_texture("kon-ocr-shot", img, egui::TextureOptions::LINEAR));
+            }
+            if c.input(|i| i.key_pressed(egui::Key::Escape) || i.viewport().close_requested()) { return (1, None); }
+            let mut res = (0u8, None);
+            egui::CentralPanel::default().frame(egui::Frame::NONE).show(c, |ui| {
+                let full = c.content_rect();
+                let p = ui.painter();
+                if let Some(t) = &shot.tex { p.image(t.id(), full, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE); }
+                let resp = ui.interact(full, ui.id().with("ocr-drag"), Sense::drag());
+                c.set_cursor_icon(egui::CursorIcon::Crosshair);
+                if resp.drag_started() { shot.start = resp.interact_pointer_pos(); shot.sel = shot.start.map(|s| Rect::from_min_size(s, Vec2::ZERO)); }
+                if resp.dragged() { if let (Some(s), Some(q)) = (shot.start, resp.interact_pointer_pos()) { shot.sel = Some(Rect::from_two_pos(s, q)); } }
+                // escurece só fora do recorte
+                let dim = Color32::from_black_alpha(77);
+                match shot.sel {
+                    Some(r) if r.width() > 0.0 || r.height() > 0.0 => {
+                        p.rect_filled(Rect::from_min_max(full.min, pos2(full.right(), r.top())), 0.0, dim);
+                        p.rect_filled(Rect::from_min_max(pos2(full.left(), r.bottom()), full.max), 0.0, dim);
+                        p.rect_filled(Rect::from_min_max(pos2(full.left(), r.top()), pos2(r.left(), r.bottom())), 0.0, dim);
+                        p.rect_filled(Rect::from_min_max(pos2(r.right(), r.top()), pos2(full.right(), r.bottom())), 0.0, dim);
+                        for (i, a) in [(10.0f32, 18u8), (6.0, 30), (3.0, 45)] { p.rect_stroke(r.expand(i), CornerRadius::same((12.0 + i) as u8), Stroke::new(3.0_f32, Color32::from_rgba_unmultiplied(99, 102, 241, a)), egui::StrokeKind::Middle); }
+                        p.rect_stroke(r, CornerRadius::same(12), Stroke::new(2.0_f32, Color32::from_rgb(129, 140, 248)), egui::StrokeKind::Inside);
+                    }
+                    _ => { p.rect_filled(full, 0.0, dim); }
+                }
+                // aviso no topo
+                let msg = "Arraste sobre o texto para capturar · Esc cancela";
+                let tw = p.layout_no_wrap(msg.into(), FontId::proportional(12.5), Color32::WHITE).size().x;
+                let pr = Rect::from_center_size(pos2(full.center().x, full.top() + 56.0 + 18.0), vec2(tw + 32.0 + 22.0, 36.0));
+                p.rect_filled(pr.translate(vec2(0.0, 6.0)).expand(6.0), CornerRadius::same(24), Color32::from_black_alpha(40));
+                p.rect_filled(pr, CornerRadius::same(18), Color32::from_black_alpha(217));
+                p.rect_stroke(pr, CornerRadius::same(18), Stroke::new(1.0_f32, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
+                p.text(pos2(pr.left() + 16.0, pr.center().y), Align2::LEFT_CENTER, ic::SPARKLES, icon_font(14.0), Color32::from_rgb(165, 180, 252));
+                p.text(pos2(pr.left() + 16.0 + 22.0, pr.center().y), Align2::LEFT_CENTER, msg, FontId::proportional(12.5), Color32::from_white_alpha(230));
+                if resp.drag_stopped() {
+                    let sel = shot.sel.take(); shot.start = None;
+                    if let Some(r) = sel.filter(|r| r.width() >= 6.0 && r.height() >= 6.0) {
+                        let kx = shot.w as f32 / full.width(); let ky = shot.h as f32 / full.height();
+                        let x0 = (((r.left() - full.left()) * kx).round().max(0.0) as u32).min(shot.w - 1);
+                        let y0 = (((r.top() - full.top()) * ky).round().max(0.0) as u32).min(shot.h - 1);
+                        let cw = ((r.width() * kx).round() as u32).clamp(1, shot.w - x0);
+                        let ch = ((r.height() * ky).round() as u32).clamp(1, shot.h - y0);
+                        let mut buf = Vec::with_capacity((cw * ch * 4) as usize);
+                        for y in y0..y0 + ch { let i = ((y * shot.w + x0) * 4) as usize; buf.extend_from_slice(&shot.rgba[i..i + (cw * 4) as usize]); }
+                        res = (2, Some((cw, ch, buf)));
+                    }
+                }
+            });
+            res
+        });
+        if out.0 != 0 { crate::platform::set_visible(!self.hidden); }
+        match out {
+            (0, _) => {}
+            (1, _) => { self.ocr_shot = None; }
+            (_, crop) => {
+                self.ocr_shot = None;
+                if let Some((w, h, buf)) = crop { self.run_ocr(ctx, w, h, buf); }
+            }
+        }
+    }
+
+    fn run_ocr(&mut self, ctx: &egui::Context, w: u32, h: u32, buf: Vec<u8>) {
+        *self.ocr.lock().unwrap() = OcrRes { reading: true, ..Default::default() };
+        self.ocr_q.clear();
+        self.view = View::Ocr;
+        let st = self.ocr.clone(); let c = ctx.clone();
+        std::thread::spawn(move || {
+            // ampliar 2x ajuda o OCR; o Windows aceita até ~2600 px no maior lado
+            let k = (2.0f32).min(2600.0 / w.max(h) as f32);
+            let (w2, h2, img) = match image::RgbaImage::from_raw(w, h, buf) {
+                Some(im) if (k - 1.0).abs() > 0.01 => { let (nw, nh) = (((w as f32 * k).round() as u32).max(1), ((h as f32 * k).round() as u32).max(1)); (nw, nh, image::imageops::resize(&im, nw, nh, image::imageops::FilterType::CatmullRom).into_raw()) }
+                Some(im) => (w, h, im.into_raw()),
+                None => (w, h, vec![]),
+            };
+            let r = if img.is_empty() { Err("imagem inválida".to_string()) } else { crate::platform::ocr(w2, h2, &img) };
+            let mut g = st.lock().unwrap();
+            g.reading = false;
+            match r {
+                Ok(t) => { let t = t.trim().to_string(); if !t.is_empty() { clipboard::write_text(&t); g.copied = true; } g.text = t; }
+                Err(e) => { g.error = e; }
+            }
+            drop(g); c.request_repaint();
+        });
+    }
+
+    fn draw_drop(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
+        let p = ui.painter().clone();
+        let a = ((self.h.v - 40.0) / 60.0).clamp(0.0, 1.0);
+        let inner = Rect::from_min_max(pos2(r.left() + 10.0, r.top() + 8.0), pos2(r.right() - 10.0, r.bottom() - 10.0));
+        let tw = 5.2 * 1.35 * 5.0 + 8.0;
+        self.tofu(ui, pos2(inner.left() + tw / 2.0, inner.center().y), 1.35, Mood::Eating, blink, a);
+        let zx = inner.left() + tw + 8.0;
+        let zw = (inner.right() - zx - 16.0) / 3.0;
+        let ai_name = if self.settings.provider == "claude" { "Claude" } else { "Gemini" };
+        let zones: [(char, &str, String, Color32, Color32, Color32); 3] = [
+            (ic::DOWNLOAD, "Guardar", "só a referência · nada é lido".into(), Color32::from_rgba_unmultiplied(110, 231, 183, 179), Color32::from_rgba_unmultiplied(52, 211, 153, 26), Color32::from_rgb(110, 231, 183)),
+            (ic::SPARKLES, "Perguntar à IA", format!("envia o arquivo para o {ai_name}"), Color32::from_rgba_unmultiplied(196, 181, 253, 179), Color32::from_rgba_unmultiplied(167, 139, 250, 26), Color32::from_rgb(196, 181, 253)),
+            (ic::ARCHIVE, "Compactar", "cria um .zip ao lado".into(), Color32::from_rgba_unmultiplied(125, 211, 252, 179), Color32::from_rgba_unmultiplied(56, 189, 248, 26), Color32::from_rgb(125, 211, 252)),
+        ];
+        for (i, (icon, label, sub, border, bg, fg)) in zones.iter().enumerate() {
+            let zr = Rect::from_min_size(pos2(zx + i as f32 * (zw + 8.0), inner.top()), vec2(zw, inner.height()));
+            self.drop_rects[i] = zr;
+            let on = self.drop_zone as usize == i;
+            if on { p.rect_filled(zr, CornerRadius::same(16), fade(*bg, a)); }
+            dashed_rr(&p, zr.shrink(1.0), 15.0, fade(if on { *border } else { Color32::from_white_alpha(38) }, a));
+            dashed_rr(&p, zr.shrink(1.6), 14.4, fade(if on { *border } else { Color32::from_white_alpha(38) }, a));
+            let c = zr.center();
+            p.text(pos2(c.x, c.y - 17.0), Align2::CENTER_CENTER, *icon, icon_font(17.0), fade(if on { *fg } else { Color32::from_white_alpha(128) }, a));
+            p.text(pos2(c.x, c.y + 3.0), Align2::CENTER_CENTER, *label, bold(12.0), fade(Color32::WHITE, a));
+            let mut job = egui::text::LayoutJob::single_section(sub.clone(), egui::TextFormat { font_id: FontId::proportional(9.5), color: fade(Color32::from_white_alpha(115), a), line_height: Some(11.0), ..Default::default() });
+            job.wrap.max_width = zw - 12.0; job.halign = Align::Center;
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            p.galley(pos2(c.x, c.y + 11.0), g, Color32::WHITE);
+        }
+    }
+
+    fn draw_ocr(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
+        let p = ui.painter().clone();
+        let o = self.ocr.lock().unwrap().clone();
+        if o.reading {
+            let label = "Lendo texto";
+            let tw = ui.painter().layout_no_wrap(label.to_string(), bold(13.5), Color32::WHITE).size().x;
+            let total = 22.0 + 10.0 + tw + 14.0;
+            let x0 = r.center().x - total / 2.0; let cy = r.top() + 22.0;
+            self.tofu(ui, pos2(x0 + 11.0, cy), 0.82, Mood::Working, blink, 1.0);
+            p.text(pos2(x0 + 32.0, cy), Align2::LEFT_CENTER, label, bold(13.5), Color32::WHITE);
+            let t = ui.input(|i| i.time) as f32;
+            for i in 0..3 {
+                let ph = ((t / 0.9 - i as f32 * 0.15 / 0.9).rem_euclid(1.0) * std::f32::consts::TAU).cos();
+                let a = 0.6 - 0.4 * ph;
+                p.text(pos2(x0 + 32.0 + tw + 1.0 + i as f32 * 4.5, cy), Align2::LEFT_CENTER, ".", FontId::proportional(13.5), fade(Color32::WHITE, a));
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(33));
+            return;
+        }
+        let hy = r.top() + 23.0;
+        let err = !o.error.is_empty();
+        self.tofu(ui, pos2(r.left() + 16.0 + 14.0, hy), 0.82, if err { Mood::Error } else { Mood::Done }, blink, 1.0);
+        p.hline(r.left()..=r.right(), r.top() + 46.0, Stroke::new(1.0_f32, Color32::from_white_alpha(15)));
+        let sr = Rect::from_center_size(pos2(r.right() - 10.0 - 14.0, hy), vec2(28.0, 28.0));
+        let srsp = ui.interact(sr, ui.id().with("ocrs"), Sense::click());
+        if srsp.hovered() { p.circle_filled(sr.center(), 14.0, Color32::from_white_alpha(25)); }
+        p.text(sr.center(), Align2::CENTER_CENTER, ic::SEARCH, icon_font(15.0), Color32::from_white_alpha(if srsp.hovered() { 255 } else { 179 }));
+        let fr = Rect::from_min_max(pos2(r.left() + 16.0 + 28.0 + 12.0, hy - 11.0), pos2(sr.left() - 10.0, hy + 11.0));
+        let te = egui::TextEdit::singleline(&mut self.ocr_q).hint_text(egui::RichText::new("Pergunte sobre este texto").color(Color32::from_white_alpha(90))).frame(false).font(FontId::proportional(14.5)).text_color(Color32::WHITE).desired_width(fr.width());
+        let resp = ui.put(fr, te);
+        if !resp.has_focus() && ui.memory(|m| m.focused().is_none()) { resp.request_focus(); }
+        let enter = (resp.lost_focus() || resp.has_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if (enter || srsp.clicked()) && !self.ocr_q.trim().is_empty() && !o.text.is_empty() {
+            let q = std::mem::take(&mut self.ocr_q).trim().to_string();
+            ai::cancel(&self.ask);
+            self.ask_q.clear(); self.ask_rows = 0.0;
+            let req = self.ask_req(); let c = ui.ctx().clone();
+            ai::ask_with(&self.ask, q, Some(o.text.clone()), None, req, move || c.request_repaint());
+            self.view = View::Ask;
+            return;
+        }
+        // texto lido
+        let body = Rect::from_min_max(pos2(r.left() + 20.0, r.top() + 46.0 + 10.0), pos2(r.right() - 20.0, r.bottom() - 42.0 - 10.0));
+        let (txt, col) = if err { (format!("Não consegui ler o texto: {}", o.error), Color32::from_rgba_unmultiplied(253, 230, 138, 230)) } else if o.text.is_empty() { ("(nenhum texto encontrado na seleção)".to_string(), Color32::WHITE) } else { (o.text.clone(), Color32::WHITE) };
+        let mut job = egui::text::LayoutJob::single_section(txt, egui::TextFormat { font_id: FontId::monospace(13.0), color: col, line_height: Some(21.0), ..Default::default() });
+        job.wrap.max_width = body.width();
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        let over = (g.size().y - body.height()).max(0.0);
+        let brsp = ui.interact(body, ui.id().with("ocrb"), Sense::hover());
+        if brsp.hovered() { let d = ui.input(|i| i.smooth_scroll_delta.y); self.clip_scroll = (self.clip_scroll - d).clamp(0.0, over); } else if over == 0.0 { self.clip_scroll = 0.0; }
+        let sc = self.clip_scroll.min(over);
+        p.with_clip_rect(body).galley(pos2(body.left(), body.top() - sc), g, col);
+        // rodapé
+        let fy = r.bottom() - 21.0;
+        p.text(pos2(r.left() + 16.0, fy), Align2::LEFT_CENTER, format!("Smart OCR · Windows · {}", if o.copied { "Copiado para a área de transferência" } else { "Pronto para copiar" }), FontId::proportional(11.0), Color32::from_white_alpha(102));
+        let mut rx = r.right() - 16.0;
+        if small_pill(ui, &p, &mut rx, fy, Some(ic::X), "Fechar", false, 1.0) { self.view = View::Compact; }
+        let copied = self.copied_at.map_or(false, |t| t.elapsed() < Duration::from_millis(1500));
+        if small_pill(ui, &p, &mut rx, fy, Some(if copied { ic::CHECK } else { ic::COPY }), "Copiar", false, 1.0) && !o.text.is_empty() {
+            ui.ctx().copy_text(o.text.clone()); self.copied_at = Some(Instant::now()); self.ocr.lock().unwrap().copied = true;
+        }
     }
 
     fn draw_ask(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
@@ -1327,29 +1639,113 @@ impl KonApp {
         let hy = r.top() + 23.0;
         let am = match st.phase { ai::Phase::Thinking | ai::Phase::Streaming => Mood::Working, ai::Phase::Done => match &st.error { Some(e) if e.0 == "NO_KEY" => Mood::Attention, Some(_) => Mood::Error, None => Mood::Done }, _ => Mood::Idle };
         self.tofu(ui, pos2(r.left() + 16.0 + 14.0, hy), 0.82, am, blink, 1.0);
-        // botões à direita
+        // o que aparece ao lado do campo enquanto você digita (conta, unidade, câmbio)
+        let c2 = ui.ctx().clone();
+        let inl = calc::inline(&self.ask_q, &self.rates, move || c2.request_repaint());
+        let listening = self.dict.lock().unwrap().0;
+        let dres = self.dict.lock().unwrap().1.take();
+        if let Some(res) = dres {
+            match res { Ok(t) if !t.trim().is_empty() => { self.ask_q = t.trim().to_string(); } Ok(_) => {} Err(e) => self.toast_err(&e) }
+        }
+        let file = self.ask_file.clone();
+        let can_ask = (!self.ask_q.trim().is_empty() || file.as_ref().map_or(false, |f| !f.sent)) && inl.is_none() && !self.ask_q.trim_end().ends_with('=');
+        let default_q = if file.as_ref().map_or(false, |f| f.screen) { "O que está na minha tela? Resuma o que importa." } else { "Resuma este arquivo." };
+        // botões à direita: [IA] [ditar] [tela] [traduzir] [enviar]
+        let btn = |ui: &mut egui::Ui, p: &egui::Painter, x: f32, id: &str, icon: char, tip: &str, red: bool| -> egui::Response {
+            let br = Rect::from_min_size(pos2(x - 28.0, hy - 14.0), vec2(28.0, 28.0));
+            let rsp = ui.interact(br, ui.id().with(("askb", id)), Sense::click()).on_hover_text(tip);
+            if red { p.circle_filled(br.center(), 14.0, Color32::from_rgba_unmultiplied(239, 68, 68, 230)); } else if rsp.hovered() { p.circle_filled(br.center(), 14.0, Color32::from_white_alpha(25)); }
+            p.text(br.center(), Align2::CENTER_CENTER, icon, icon_font(if icon == ic::SQUARE { 11.0 } else { 15.0 }), if red { Color32::WHITE } else { Color32::from_white_alpha(if rsp.hovered() { 255 } else if id == "send" { 178 } else { 115 }) });
+            rsp
+        };
         let mut bx = r.right() - 10.0;
-        let send = Rect::from_min_size(pos2(bx - 28.0, hy - 14.0), vec2(28.0, 28.0));
-        let srsp = ui.interact(send, ui.id().with("asksend"), Sense::click());
-        if srsp.hovered() { p.circle_filled(send.center(), 14.0, Color32::from_white_alpha(25)); }
-        p.text(send.center(), Align2::CENTER_CENTER, ic::SEARCH, icon_font(15.0), Color32::from_white_alpha(if srsp.hovered() { 255 } else { 178 }));
-        bx = send.left() - 6.0;
-        let pw = text_w(ui, pname, 10.5) + 16.0;
-        let pr = Rect::from_min_size(pos2(bx - pw, hy - 12.0), vec2(pw, 24.0));
-        let prsp = ui.interact(pr, ui.id().with("askprov"), Sense::click()).on_hover_text("Alternar IA");
-        p.rect_filled(pr, CornerRadius::same(12), Color32::from_white_alpha(if prsp.hovered() { 38 } else { 20 }));
-        p.text(pr.center(), Align2::CENTER_CENTER, pname, bold(10.5), Color32::from_white_alpha(178));
-        if prsp.clicked() { self.settings.provider = if pv == "claude" { "gemini".into() } else { "claude".into() }; self.settings.save(); }
-        // campo
-        let fr = Rect::from_min_max(pos2(r.left() + 52.0, hy - 11.0), pos2(pr.left() - 10.0, hy + 11.0));
-        let hint = if st.phase == ai::Phase::Idle { "Pergunte ao Kon" } else { "Pergunte de novo" };
+        let srsp = btn(ui, &p, bx, "send", ic::SEARCH, "", false);
+        bx -= 28.0 + 8.0;
+        let mut left_edge = bx;
+        if inl.is_none() {
+            let trsp = btn(ui, &p, bx, "tr", ic::LANGUAGES, "Traduzir (Tab)", false); bx -= 36.0;
+            let mrsp = btn(ui, &p, bx, "scr", ic::MONITOR, "Perguntar sobre a tela", false); bx -= 36.0;
+            let vrsp = btn(ui, &p, bx, "mic", if listening { ic::SQUARE } else { ic::MIC }, "Ditar (pt-BR)", listening); bx -= 36.0;
+            let pw = text_w(ui, pname, 10.5) + 16.0;
+            let pr = Rect::from_min_size(pos2(bx - pw, hy - 12.0), vec2(pw, 24.0));
+            let prsp = ui.interact(pr, ui.id().with("askprov"), Sense::click()).on_hover_text("Alternar IA");
+            p.rect_filled(pr, CornerRadius::same(12), Color32::from_white_alpha(if prsp.hovered() { 38 } else { 20 }));
+            p.text(pr.center(), Align2::CENTER_CENTER, pname, bold(10.5), Color32::from_white_alpha(178));
+            if prsp.clicked() { self.settings.provider = if pv == "claude" { "gemini".into() } else { "claude".into() }; self.settings.save(); }
+            left_edge = pr.left() - 8.0;
+            if trsp.clicked() { let q = std::mem::take(&mut self.ask_q); self.open_translate(q); return; }
+            if mrsp.clicked() { self.ask_screen(); }
+            if vrsp.clicked() { self.toggle_dictation(ui.ctx()); }
+        } else if let Some(calc::Inline::Currency(_)) = &inl {
+            let g = self.rates.lock().unwrap().clone();
+            if g.at > 1 {
+                let stale = calc::rates_stale(&g);
+                let lbl = format!("ExchangeRate-API · {}{}", chrono::Local.timestamp_millis_opt(g.at).single().map_or(String::new(), |d| d.format("%H:%M").to_string()), if stale { " · offline" } else { "" });
+                let lw = ui.painter().layout_no_wrap(lbl.clone(), FontId::proportional(10.5), Color32::WHITE).size().x;
+                let lr = Rect::from_min_size(pos2(bx - lw, hy - 8.0), vec2(lw, 16.0));
+                let lrsp = ui.interact(lr, ui.id().with("rates"), Sense::click()).on_hover_text("Rates By Exchange Rate API");
+                p.text(pos2(lr.right(), hy), Align2::RIGHT_CENTER, &lbl, FontId::proportional(10.5), if stale { Color32::from_rgba_unmultiplied(252, 211, 77, 204) } else if lrsp.hovered() { Color32::from_rgb(221, 214, 254) } else { Color32::from_rgba_unmultiplied(196, 181, 253, 179) });
+                if lrsp.clicked() { let _ = quick::open_shell("https://www.exchangerate-api.com"); }
+                left_edge = lr.left() - 8.0;
+            }
+        }
+        // anexo
+        let mut fx = r.left() + 52.0;
+        if let (Some(f), true) = (&file, inl.is_none()) {
+            let name_w = ui.painter().layout_no_wrap(f.name.clone(), FontId::proportional(10.5), Color32::WHITE).size().x.min(150.0 - 6.0 - 15.0 - 4.0 - if f.sent { 0.0 } else { 20.0 });
+            let cw = 6.0 + 11.0 + 4.0 + name_w + if f.sent { 4.0 } else { 4.0 + 16.0 + 4.0 };
+            let cr = Rect::from_min_size(pos2(fx, hy - 12.0), vec2(cw, 24.0));
+            p.rect_filled(cr, CornerRadius::same(12), if f.sent { Color32::from_white_alpha(15) } else { Color32::from_rgba_unmultiplied(139, 92, 246, 51) });
+            let fg = if f.sent { Color32::from_white_alpha(115) } else { Color32::from_rgb(237, 233, 254) };
+            p.text(pos2(cr.left() + 6.0, hy), Align2::LEFT_CENTER, ic::PAPERCLIP, icon_font(11.0), fg);
+            p.text(pos2(cr.left() + 21.0, hy), Align2::LEFT_CENTER, ellipsize_w(ui, &f.name, 10.5, name_w + 1.0), FontId::proportional(10.5), fg);
+            ui.interact(cr, ui.id().with("askfile"), Sense::hover()).on_hover_text(f.path.display().to_string());
+            if !f.sent {
+                let xr = Rect::from_center_size(pos2(cr.right() - 4.0 - 8.0, hy), vec2(16.0, 16.0));
+                let xrsp = ui.interact(xr, ui.id().with("askfilex"), Sense::click());
+                if xrsp.hovered() { p.circle_filled(xr.center(), 8.0, Color32::from_white_alpha(38)); }
+                p.text(xr.center(), Align2::CENTER_CENTER, ic::X, icon_font(10.0), fg);
+                if xrsp.clicked() { self.ask_file = None; }
+            }
+            fx = cr.right() + 8.0;
+        }
+        // campo (com resposta instantânea, o campo encolhe para caber só o texto)
+        let qw = ui.painter().layout_no_wrap(self.ask_q.clone(), FontId::proportional(14.5), Color32::WHITE).size().x + 8.0;
+        let field_right = if inl.is_some() { (fx + 4.0 + qw).min(left_edge - 120.0) } else { left_edge };
+        let fr = Rect::from_min_max(pos2(fx + if inl.is_some() { 4.0 } else { 0.0 }, hy - 11.0), pos2(field_right.max(fx + 30.0), hy + 11.0));
+        let hint = if listening { "Ouvindo… fale em português".to_string() } else if let Some(f) = file.as_ref().filter(|f| !f.sent) { if f.screen { "Pergunte sobre a tela".into() } else { format!("Pergunte sobre {}", f.name) } } else if st.phase == ai::Phase::Idle { "Pergunte ao Kon".into() } else { "Pergunte de novo".into() };
+        let before = self.ask_q.clone();
         let te = egui::TextEdit::singleline(&mut self.ask_q).hint_text(egui::RichText::new(hint).color(Color32::from_white_alpha(90))).frame(false).font(FontId::proportional(14.5)).text_color(Color32::WHITE).desired_width(fr.width());
         let resp = ui.put(fr, te);
+        // só números e operadores: o * vira × enquanto você digita
+        if self.ask_q != before && !self.ask_q.is_empty() && self.ask_q.chars().all(|c| c.is_ascii_digit() || c.is_whitespace() || ".,+-*×xX÷/%()=".contains(c)) && self.ask_q.contains('*') { self.ask_q = self.ask_q.replace('*', "×"); }
         if !resp.has_focus() && ui.memory(|m| m.focused().is_none()) { resp.request_focus(); }
         if resp.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) { let q = std::mem::take(&mut self.ask_q); self.open_translate(q); return; }
+        // resultado instantâneo: clique (ou Enter) copia
+        let mut copy_inline = false;
+        if let Some(inl) = &inl {
+            let txt = inl.text().to_string();
+            let tw = ui.painter().layout_no_wrap(txt.clone(), bold(15.0), Color32::WHITE).size().x;
+            let ir = Rect::from_min_size(pos2(fr.right() + 10.0, hy - 12.0), vec2(1.0 + 10.0 + tw + 10.0 + 20.0, 24.0));
+            let irsp = ui.interact(ir, ui.id().with(("inl", txt.as_str())), Sense::click()).on_hover_text("Clique para copiar");
+            p.vline(ir.left(), (hy - 10.0)..=(hy + 10.0), Stroke::new(1.0_f32, Color32::from_white_alpha(51)));
+            let tx = ir.left() + 11.0;
+            for (d, a) in [(2.5f32, 10u8), (1.2, 16)] { for (dx, dy) in [(d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d)] { p.text(pos2(tx + dx, hy + dy), Align2::LEFT_CENTER, &txt, bold(15.0), Color32::from_white_alpha(a)); } }
+            p.text(pos2(tx, hy), Align2::LEFT_CENTER, &txt, bold(15.0), Color32::WHITE);
+            let copied = self.copied_at.map_or(false, |t| t.elapsed() < Duration::from_millis(1500));
+            p.text(pos2(tx + tw + 10.0 + 10.0, hy), Align2::CENTER_CENTER, if copied { ic::CHECK } else { ic::COPY }, icon_font(if copied { 13.0 } else { 12.0 }), if copied { Color32::from_rgb(52, 211, 153) } else { Color32::from_white_alpha(if irsp.hovered() { 255 } else { 115 }) });
+            copy_inline = irsp.clicked();
+        }
         let enter = (resp.lost_focus() || resp.has_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if std::env::var("KON_DEBUG").is_ok() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { .. }))) { eprintln!("keys: focus={} lost={} enter={}", resp.has_focus(), resp.lost_focus(), enter); }
-        if enter || srsp.clicked() { self.submit_ask(ui.ctx()); resp.request_focus(); }
+        let inline_ok = inl.as_ref().map_or(false, |i| !matches!(i, calc::Inline::Unit(_, true)) && !i.text().contains("carregando") && !i.text().contains("desconhecida"));
+        if copy_inline || (enter && !can_ask && inline_ok) {
+            if let Some(i) = &inl { ui.ctx().copy_text(i.text().to_string()); self.copied_at = Some(Instant::now()); }
+            resp.request_focus();
+        } else if (enter || srsp.clicked()) && can_ask {
+            if self.ask_q.trim().is_empty() { self.ask_q = default_q.into(); }
+            self.submit_ask(ui.ctx()); resp.request_focus();
+        } else if srsp.clicked() { resp.request_focus(); }
         if st.phase == ai::Phase::Idle { return; }
         // resposta
         let body = Rect::from_min_max(pos2(r.left() + 20.0, r.top() + 46.0), pos2(r.right() - 20.0, r.bottom() - 42.0));
@@ -3533,10 +3929,10 @@ fn spawn_cursor_watch(ctx: egui::Context, hit: Arc<Mutex<Hit>>) {
 
 /* ───────── ícone perto do relógio ───────── */
 mod tray {
-    pub enum Action { Open, Quit }
+    pub enum Action { Open, Ocr, Update, Quit }
 
     #[cfg(windows)]
-    pub struct Tray { _icon: tray_icon::TrayIcon, open: tray_icon::menu::MenuId, quit: tray_icon::menu::MenuId }
+    pub struct Tray { _icon: tray_icon::TrayIcon, open: tray_icon::menu::MenuId, ocr: tray_icon::menu::MenuId, upd: tray_icon::menu::MenuId, quit: tray_icon::menu::MenuId }
 
     #[cfg(windows)]
     impl Tray {
@@ -3544,19 +3940,21 @@ mod tray {
             use tray_icon::menu::{Menu, MenuItem, PredefinedMenuItem};
             let menu = Menu::new();
             let open = MenuItem::new("Abrir painel", true, None);
+            let ocr = MenuItem::new("Smart OCR\tCtrl+Alt+T", true, None);
+            let upd = MenuItem::new("Procurar atualização", true, None);
             let quit = MenuItem::new("Sair do Kon", true, None);
-            menu.append_items(&[&open, &PredefinedMenuItem::separator(), &quit]).ok()?;
+            menu.append_items(&[&open, &ocr, &PredefinedMenuItem::separator(), &upd, &PredefinedMenuItem::separator(), &quit]).ok()?;
             let icon = tray_icon::Icon::from_rgba(icon_rgba(), 32, 32).ok()?;
             let t = tray_icon::TrayIconBuilder::new().with_menu(Box::new(menu)).with_tooltip("Kon").with_icon(icon).build().ok()?;
             let c2 = ctx.clone();
             tray_icon::menu::MenuEvent::set_event_handler(Some(move |_e| c2.request_repaint()));
             tray_icon::TrayIconEvent::set_event_handler(Some(move |_e| ctx.request_repaint()));
-            Some(Tray { _icon: t, open: open.id().clone(), quit: quit.id().clone() })
+            Some(Tray { _icon: t, open: open.id().clone(), ocr: ocr.id().clone(), upd: upd.id().clone(), quit: quit.id().clone() })
         }
         pub fn poll(&self) -> Vec<Action> {
             let mut out = vec![];
             while let Ok(e) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-                if e.id == self.open { out.push(Action::Open) } else if e.id == self.quit { out.push(Action::Quit) }
+                if e.id == self.open { out.push(Action::Open) } else if e.id == self.ocr { out.push(Action::Ocr) } else if e.id == self.upd { out.push(Action::Update) } else if e.id == self.quit { out.push(Action::Quit) }
             }
             out
         }
@@ -3582,4 +3980,28 @@ mod tray {
         pub fn new(_ctx: eframe::egui::Context) -> Option<Self> { None }
         pub fn poll(&self) -> Vec<Action> { vec![] }
     }
+}
+
+/// "Compactar" da zona de soltar: cria um .zip ao lado do primeiro item (Compress-Archive do Windows).
+fn zip_files(paths: Vec<std::path::PathBuf>, out: Arc<Mutex<Option<Result<std::path::PathBuf, String>>>>, ctx: egui::Context) {
+    std::thread::spawn(move || {
+        let list: Vec<_> = paths.into_iter().filter(|p| p.exists()).collect();
+        let r: Result<std::path::PathBuf, String> = (|| {
+            let first = list.first().ok_or("Nada para compactar")?;
+            if !cfg!(windows) { return Err("Compactar só funciona no Windows".into()); }
+            let dir = first.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+            let base = if list.len() == 1 { first.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or("Arquivos".into()) } else { "Arquivos".into() };
+            let mut dest = dir.join(format!("{base}.zip"));
+            let mut i = 2; while dest.exists() { dest = dir.join(format!("{base} ({i}).zip")); i += 1; }
+            let q = |p: &std::path::Path| format!("'{}'", p.display().to_string().replace('\'', "''"));
+            let cmd = format!("Compress-Archive -LiteralPath {} -DestinationPath {} -CompressionLevel Optimal", list.iter().map(|p| q(p)).collect::<Vec<_>>().join(","), q(&dest));
+            let mut c = std::process::Command::new("powershell");
+            c.args(["-NoProfile", "-NonInteractive", "-Command", &cmd]);
+            #[cfg(windows)] { use std::os::windows::process::CommandExt; c.creation_flags(0x0800_0000); }
+            let o = c.output().map_err(|e| e.to_string())?;
+            if o.status.success() && dest.exists() { Ok(dest) } else { Err(String::from_utf8_lossy(&o.stderr).lines().next().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).unwrap_or("Falhou ao compactar".into())) }
+        })();
+        *out.lock().unwrap() = Some(r);
+        ctx.request_repaint();
+    });
 }

@@ -1,10 +1,10 @@
 //! Atalhos globais do Kon atual: Ctrl+Alt+Espaço (Perguntar), Ctrl+Alt+E (painel), Ctrl+Alt+V (Área de transferência),
-//! Ctrl+Alt+R (ações no texto selecionado).
+//! Ctrl+Alt+R (ações no texto selecionado), Ctrl+Alt+T (Smart OCR).
 
 use std::sync::mpsc::{channel, Receiver};
 
 #[derive(Clone, Copy, Debug)]
-pub enum Hot { Ask, Panel, Clip, Text }
+pub enum Hot { Ask, Panel, Clip, Text, Ocr }
 
 pub fn start(repaint: impl Fn() + Send + 'static) -> Receiver<Hot> {
     let (tx, rx) = channel();
@@ -18,10 +18,11 @@ pub fn start(repaint: impl Fn() + Send + 'static) -> Receiver<Hot> {
         let _ = RegisterHotKey(None, 2, m, 'E' as u32);
         let _ = RegisterHotKey(None, 3, m, 'V' as u32);
         let _ = RegisterHotKey(None, 4, m, 'R' as u32);
+        let _ = RegisterHotKey(None, 5, m, 'T' as u32);
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.message == WM_HOTKEY {
-                let h = match msg.wParam.0 { 1 => Hot::Ask, 2 => Hot::Panel, 3 => Hot::Clip, _ => Hot::Text };
+                let h = match msg.wParam.0 { 1 => Hot::Ask, 2 => Hot::Panel, 3 => Hot::Clip, 5 => Hot::Ocr, _ => Hot::Text };
                 if tx.send(h).is_err() { break; }
                 repaint();
             }

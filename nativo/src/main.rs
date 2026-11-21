@@ -2,10 +2,12 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod ai;
+mod calc;
 mod calendar;
 mod claude;
 mod clipboard;
 mod hotkeys;
+mod installer;
 mod icons;
 mod inuse;
 mod mascot;
@@ -33,6 +35,9 @@ const WIN_W: f32 = 820.0;
 const WIN_H: f32 = 560.0;
 
 fn main() -> eframe::Result<()> {
+    if std::env::args().any(|a| a == "--uninstall") { installer::uninstall(); return Ok(()); }
+    if !installer::single_instance() { return Ok(()); }
+    if installer::ensure_installed() { return Ok(()); }
     let area = platform::primary_work_area();
     // posição em pixels lógicos: o eframe converte com a escala do monitor principal
     let scale = guess_scale(area.w);

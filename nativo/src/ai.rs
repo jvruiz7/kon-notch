@@ -13,7 +13,42 @@ const GEMINI_FALLBACK: &str = "gemini-flash-latest";
 pub enum Phase { Idle, Thinking, Streaming, Done }
 
 #[derive(Clone, Debug)]
-pub struct Msg { pub user: bool, pub text: String }
+pub struct Msg { pub user: bool, pub text: String, pub att: Option<Att> }
+
+/// Arquivo anexado de propósito (imagem ou PDF vão inteiros; texto entra na mensagem). Só é lido quando você pergunta.
+#[derive(Clone, Debug)]
+pub struct Att { pub name: String, pub mime: String, pub data: String, pub pdf: bool }
+
+pub fn b64(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut o = String::with_capacity((b.len() + 2) / 3 * 4);
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        o.push(T[(n >> 18) as usize & 63] as char); o.push(T[(n >> 12) as usize & 63] as char);
+        o.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        o.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    o
+}
+
+const TEXT_EXT: &[&str] = &["txt", "md", "csv", "tsv", "json", "js", "jsx", "ts", "tsx", "py", "rs", "go", "java", "c", "cpp", "h", "cs", "html", "css", "xml", "yml", "yaml", "toml", "ini", "log", "sql", "sh", "ps1", "bat"];
+/// Lê o anexo: Ok((texto extra para a mensagem, anexo binário)).
+pub fn read_attachment(p: &std::path::Path) -> Result<(Option<String>, Option<Att>), String> {
+    let meta = std::fs::metadata(p).map_err(|_| "Não encontrei o arquivo".to_string())?;
+    if meta.is_dir() { return Err("Pastas não podem ser enviadas: escolha um arquivo".into()); }
+    let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    if TEXT_EXT.contains(&ext.as_str()) {
+        if meta.len() > 400_000 { return Err("Arquivo de texto grande demais (máx. 400 KB)".into()); }
+        let t = String::from_utf8_lossy(&std::fs::read(p).map_err(|e| e.to_string())?).to_string();
+        return Ok((Some(format!("Arquivo anexado \"{name}\":\n\n{t}\n\n---\n")), None));
+    }
+    let mime = match ext.as_str() { "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "webp" => "image/webp", "gif" => "image/gif", "pdf" => "application/pdf", _ => return Err(format!("Não sei ler arquivos .{} (texto, imagem ou PDF)", if ext.is_empty() { "?" } else { &ext })) };
+    let pdf = ext == "pdf";
+    if pdf && meta.len() > 10_000_000 { return Err("PDF grande demais (máx. 10 MB)".into()); }
+    if !pdf && meta.len() > 5_000_000 { return Err("Imagem grande demais (máx. 5 MB)".into()); }
+    Ok((None, Some(Att { name, mime: mime.into(), data: b64(&std::fs::read(p).map_err(|e| e.to_string())?), pdf })))
+}
 
 #[derive(Clone, Debug)]
 pub struct Ask {
@@ -27,18 +62,35 @@ pub type Shared = Arc<Mutex<Ask>>;
 
 pub struct Req { pub provider: String, pub key: String, pub model: String, pub web: bool, pub system: String }
 
-pub fn ask(st: &Shared, q: String, req: Req, repaint: impl Fn() + Send + 'static) {
+pub fn ask(st: &Shared, q: String, req: Req, repaint: impl Fn() + Send + 'static) { ask_with(st, q, None, None, req, repaint) }
+
+/// Igual a `ask`, com um texto capturado da tela (OCR, conversa nova) ou um arquivo anexado.
+pub fn ask_with(st: &Shared, q: String, context: Option<String>, file: Option<std::path::PathBuf>, req: Req, repaint: impl Fn() + Send + 'static) {
     let id = {
         let mut g = st.lock().unwrap();
         g.id += 1;
-        let mut history = g.history.clone();
-        history.push(Msg { user: true, text: q.clone() });
+        let mut history = if context.is_some() { vec![] } else { g.history.clone() };
+        let full = match &context { Some(c) => format!("Texto capturado da minha tela:\n\"\"\"\n{c}\n\"\"\"\n\n{q}"), None => q.clone() };
+        history.push(Msg { user: true, text: full, att: None });
         *g = Ask { id: g.id, phase: Phase::Thinking, question: q, history, ..Default::default() };
         g.id
     };
     let st = st.clone();
     std::thread::spawn(move || {
-        let history = st.lock().unwrap().history.clone();
+        let mut history = st.lock().unwrap().history.clone();
+        // o anexo só é lido agora, e vai só para a IA escolhida
+        if let Some(f) = &file {
+            match read_attachment(f) {
+                Ok((text, att)) => if let Some(last) = history.last_mut() {
+                    match (text, att) { (Some(t), _) => last.text = format!("{t}{}", last.text), (_, Some(a)) => { last.text = format!("(arquivo: {})\n{}", a.name, last.text); last.att = Some(a); } _ => {} }
+                },
+                Err(e) => {
+                    let mut g = st.lock().unwrap();
+                    if g.id == id { g.answer = e; g.error = Some(("FILE".into(), req.provider.clone())); g.history.pop(); g.phase = Phase::Done; }
+                    drop(g); repaint(); return;
+                }
+            }
+        }
         let alive = || st.lock().unwrap().id == id;
         let on_text = |t: &str| { let mut g = st.lock().unwrap(); if g.id == id { g.answer.push_str(t); g.phase = Phase::Streaming; } drop(g); repaint(); };
         let res = if req.key.is_empty() { Err(("NO_KEY".to_string(), String::new())) }
@@ -47,7 +99,7 @@ pub fn ask(st: &Shared, q: String, req: Req, repaint: impl Fn() + Send + 'static
         let mut g = st.lock().unwrap();
         if g.id != id { return; }
         match res {
-            Ok(r) => { g.sources = r.sources; g.fell_back = r.fell_back.clone(); g.new_model = r.fell_back.map(|f| f.1); g.tokens = r.tokens; let a = g.answer.clone(); g.history.push(Msg { user: false, text: a }); }
+            Ok(r) => { g.sources = r.sources; g.fell_back = r.fell_back.clone(); g.new_model = r.fell_back.map(|f| f.1); g.tokens = r.tokens; let a = g.answer.clone(); if let (Some(l), Some(h)) = (g.history.last_mut(), history.last()) { l.text = h.text.clone(); } g.history.push(Msg { user: false, text: a, att: None }); }
             Err((code, msg)) => {
                 let p = if req.provider == "claude" { "Claude" } else { "Gemini" };
                 g.answer = if code == "NO_KEY" { format!("Adicione sua chave {} em Configurações para usar o {p}.", if req.provider == "claude" { "ANTHROPIC_API_KEY" } else { "GEMINI_API_KEY" }) } else { format!("{p}: {msg}") };
@@ -86,7 +138,10 @@ fn sse(reader: impl std::io::Read, alive: &dyn Fn() -> bool, mut on: impl FnMut(
 }
 
 fn gemini(req: &Req, model: &str, h: &[Msg], on_text: &dyn Fn(&str), alive: &dyn Fn() -> bool) -> Result<Out, E> {
-    let contents: Vec<Value> = h.iter().map(|m| json!({"role": if m.user { "user" } else { "model" }, "parts": [{"text": m.text}]})).collect();
+    let contents: Vec<Value> = h.iter().map(|m| match &m.att {
+        Some(a) => json!({"role": "user", "parts": [{"inline_data": {"mime_type": a.mime, "data": a.data}}, {"text": m.text}]}),
+        None => json!({"role": if m.user { "user" } else { "model" }, "parts": [{"text": m.text}]}),
+    }).collect();
     let mut body = json!({"contents": contents, "systemInstruction": {"parts": [{"text": req.system}]}});
     if req.web { body["tools"] = json!([{"google_search": {}}]); }
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse");
@@ -137,7 +192,10 @@ fn discover_flash(key: &str) -> Result<String, E> {
 }
 
 fn claude(req: &Req, h: &[Msg], on_text: &dyn Fn(&str), alive: &dyn Fn() -> bool) -> Result<Out, E> {
-    let msgs: Vec<Value> = h.iter().map(|m| json!({"role": if m.user { "user" } else { "assistant" }, "content": m.text})).collect();
+    let msgs: Vec<Value> = h.iter().map(|m| match &m.att {
+        Some(a) => json!({"role": "user", "content": [{"type": if a.pdf { "document" } else { "image" }, "source": {"type": "base64", "media_type": a.mime, "data": a.data}}, {"type": "text", "text": m.text}]}),
+        None => json!({"role": if m.user { "user" } else { "assistant" }, "content": m.text}),
+    }).collect();
     let body = json!({"model": req.model, "max_tokens": 1200, "system": req.system, "messages": msgs, "stream": true});
     let r = ureq::post("https://api.anthropic.com/v1/messages").set("x-api-key", &req.key).set("anthropic-version", "2023-06-01")
         .timeout(Duration::from_secs(90)).send_json(body).map_err(http_err)?;
@@ -156,7 +214,7 @@ fn claude(req: &Req, h: &[Msg], on_text: &dyn Fn(&str), alive: &dyn Fn() -> bool
 /// Pedido único (tradução, ações no texto): devolve o texto inteiro numa thread e chama `done`.
 pub fn once(req: Req, text: String, done: impl FnOnce(Result<String, E>, u64, Option<String>) + Send + 'static) {
     std::thread::spawn(move || {
-        let h = vec![Msg { user: true, text }];
+        let h = vec![Msg { user: true, text, att: None }];
         let out = Mutex::new(String::new());
         let on = |t: &str| out.lock().unwrap().push_str(t);
         let r = if req.key.is_empty() { Err(("NO_KEY".to_string(), String::new())) } else if req.provider == "claude" { claude(&req, &h, &on, &|| true) } else { gemini_with_fallback(&req, &h, &on, &|| true) };
