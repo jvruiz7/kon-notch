@@ -182,6 +182,8 @@ pub struct KonApp {
     dict: Arc<Mutex<(bool, Option<Result<String, String>>, u64)>>,
     rates: calc::SharedRates,
     drop_zone: u8,
+    drag_req: Option<String>,
+    dragging_out: Option<Instant>,
     drop_prev: Option<View>,
     drop_rects: [Rect; 3],
     zip_res: Arc<Mutex<Option<Result<std::path::PathBuf, String>>>>,
@@ -221,7 +223,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, loc, cal_month: false, tasks: Tasks::load(), sys, sys_on, art: None, art_color: None, lyr: lyrics::new(), lyr_y: 0.0, success_at: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_tab: if std::env::var("KON_SHEET").as_deref() == Ok("pages") { 1 } else { 0 }, show_key: false, loc_menu: false, ics_in: None, vol_dragging: false, report_state: 0, report_note: String::new(), report_shot: false, report_result: None, ob_step: 0, cal: Arc::new(Mutex::new(calendar::State::default())), cal_ctx: cc.egui_ctx.clone(), upd: updater::new(), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: std::env::var("KON_Q").unwrap_or_default(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), dismissed: vec![], meeting_sounded: None, key_sounded: false, fg: start_fg_watch(cc.egui_ctx.clone()), hud_at: None, vol_seen: None, perm_count: 0, dnd_prev: None, hidden: false, capture_applied: None, rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false, ocr_shot: None, ocr: Arc::new(Mutex::new(OcrRes::default())), ocr_q: String::new(), ask_file: None, dict: Arc::new(Mutex::new((false, None, 0))), rates: calc::rates_new(), drop_zone: 0, drop_prev: None, drop_rects: [Rect::NOTHING; 3], zip_res: Arc::new(Mutex::new(None)),
+            weather, loc, cal_month: false, tasks: Tasks::load(), sys, sys_on, art: None, art_color: None, lyr: lyrics::new(), lyr_y: 0.0, success_at: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_tab: if std::env::var("KON_SHEET").as_deref() == Ok("pages") { 1 } else { 0 }, show_key: false, loc_menu: false, ics_in: None, vol_dragging: false, report_state: 0, report_note: String::new(), report_shot: false, report_result: None, ob_step: 0, cal: Arc::new(Mutex::new(calendar::State::default())), cal_ctx: cc.egui_ctx.clone(), upd: updater::new(), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: std::env::var("KON_Q").unwrap_or_default(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), dismissed: vec![], meeting_sounded: None, key_sounded: false, fg: start_fg_watch(cc.egui_ctx.clone()), hud_at: None, vol_seen: None, perm_count: 0, dnd_prev: None, hidden: false, capture_applied: None, rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false, ocr_shot: None, ocr: Arc::new(Mutex::new(OcrRes::default())), ocr_q: String::new(), ask_file: None, dict: Arc::new(Mutex::new((false, None, 0))), rates: calc::rates_new(), drop_zone: 0, drag_req: None, dragging_out: None, drop_prev: None, drop_rects: [Rect::NOTHING; 3], zip_res: Arc::new(Mutex::new(None)),
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -300,7 +302,7 @@ impl KonApp {
 impl eframe::App for KonApp {
     fn clear_color(&self, _v: &egui::Visuals) -> [f32; 4] { [0.0, 0.0, 0.0, 0.0] }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.05);
         self.last_frame = now;
@@ -322,6 +324,11 @@ impl eframe::App for KonApp {
         if let Some(t) = &self._tray { for a in t.poll() { match a { tray::Action::Open => { self.view = View::Panel; } tray::Action::Ocr => self.start_ocr(ctx), tray::Action::Update => self.check_update(true), tray::Action::Quit => { self.quit = true; } } } }
         self.ocr_overlay(ctx);
         if self.quit { ctx.send_viewport_cmd(egui::ViewportCommand::Close); return; }
+        if let Some(path) = self.drag_req.take() {
+            self.dragging_out = Some(Instant::now());
+            drag_out(frame, &path);
+            self.dragging_out = Some(Instant::now());
+        }
 
         let m = self.media.snapshot();
         self.focus_tick();
@@ -384,6 +391,9 @@ impl eframe::App for KonApp {
         // arquivos arrastados até a ilha: abre a gaveta e guarda ao soltar
         let (hovering_files, dropped) = ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>()));
         // arquivos arrastados até a ilha: três zonas (Guardar · Perguntar à IA · Compactar), como no Kon atual
+        // o arquivo que você está arrastando para fora não abre as zonas de soltar
+        let hovering_files = hovering_files && self.dragging_out.map_or(true, |t| t.elapsed() > Duration::from_millis(1500));
+        let dropped = if self.dragging_out.map_or(false, |t| t.elapsed() < Duration::from_millis(1500)) { vec![] } else { dropped };
         if hovering_files {
             if self.view != View::Drop { self.drop_prev = Some(self.view); self.view = View::Drop; self.drop_zone = 0; }
             let ppp = ctx.pixels_per_point();
@@ -2264,7 +2274,7 @@ impl KonApp {
         let rr = row(y, area.left(), w, 36.0);
         pc.text(pos2(rr.left() + 10.0 + 7.0, rr.center().y), Align2::CENTER_CENTER, ic::MAP_PIN, icon_font(14.0), fade(Color32::from_rgba_unmultiplied(110, 231, 183, 204), alpha));
         pc.text(pos2(rr.left() + 32.0, rr.center().y), Align2::LEFT_CENTER, "Local", FontId::proportional(12.0), dim(255));
-        let cur = match weather::BR_CITIES.iter().find(|c| c.0 == self.settings.loc_id) { Some(c) => c.1.to_string(), None => format!("Atual ({})", self.weather.lock().unwrap().as_ref().filter(|w| w.loc_id == "auto").map_or("detectando".to_string(), |w| w.city.clone())) };
+        let cur = match weather::BR_CITIES.iter().find(|c| c.0 == self.settings.loc_id) { Some(c) => c.1.to_string(), None => format!("Atual ({})", self.weather.lock().unwrap().as_ref().filter(|w| w.loc_id == "auto").map_or("detectando / São Paulo".to_string(), |w| w.city.clone())) };
         let sel = Rect::from_min_max(pos2(rr.left() + 72.0, rr.top() + 4.5), pos2(rr.right() - 6.0, rr.bottom() - 4.5));
         pc.rect_filled(sel, CornerRadius::same(6), dim(15));
         pc.rect_stroke(sel, CornerRadius::same(6), Stroke::new(1.0_f32, dim(20)), egui::StrokeKind::Inside);
@@ -2580,7 +2590,7 @@ impl KonApp {
         p.text(pos2(body.left(), y0), Align2::LEFT_CENTER, "Arquivos", bold(15.0), fade(Color32::WHITE, alpha));
         let sub = if n == 0 { "gaveta vazia".to_string() } else { format!("{n} {}", if n == 1 { "item guardado" } else { "itens guardados" }) };
         p.text(pos2(body.left() + text_w(ui, "Arquivos", 15.0) + 8.0, y0 + 1.0), Align2::LEFT_CENTER, sub, FontId::proportional(11.5), fade(Color32::from_white_alpha(102), alpha));
-        p.text(pos2(body.right(), y0), Align2::RIGHT_CENTER, "Clique duas vezes para abrir · nada é enviado para IA", FontId::proportional(10.5), fade(Color32::from_white_alpha(90), alpha));
+        p.text(pos2(body.right(), y0), Align2::RIGHT_CENTER, if cfg!(windows) { "Arraste para fora para usar · nada é enviado para IA" } else { "Clique duas vezes para abrir · nada é enviado para IA" }, FontId::proportional(10.5), fade(Color32::from_white_alpha(90), alpha));
         let area = Rect::from_min_max(pos2(body.left(), body.top() + 26.0), body.max);
         let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
         if n == 0 || dragging {
@@ -2604,7 +2614,9 @@ impl KonApp {
             let r = Rect::from_min_size(pos2(area.left() + (i % cols) as f32 * (cw + gap), area.top() + (i / cols) as f32 * (row_h + gap) - self.files_scroll), vec2(cw, row_h));
             if r.bottom() < area.top() || r.top() > area.bottom() { continue; }
             let vis = r.intersect(area);
-            let resp = ui.interact(vis, ui.id().with(("stash", it.id)), Sense::click()).on_hover_text(&it.path);
+            let resp = ui.interact(vis, ui.id().with(("stash", it.id)), Sense::click_and_drag()).on_hover_text(&it.path);
+            // arrastar para fora: solta em qualquer programa (Explorer, e-mail, WhatsApp...)
+            if resp.drag_started() && !it.missing { self.drag_req = Some(it.path.clone()); }
             let a = if it.missing { alpha * 0.45 } else { alpha };
             pc.rect_filled(r, CornerRadius::same(12), fade(Color32::from_white_alpha(if resp.hovered() { 23 } else { 13 }), a));
             pc.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(15), a)), egui::StrokeKind::Inside);
@@ -4005,3 +4017,20 @@ fn zip_files(paths: Vec<std::path::PathBuf>, out: Arc<Mutex<Option<Result<std::p
         ctx.request_repaint();
     });
 }
+
+/// Começa a arrastar um arquivo guardado para fora do Kon (OLE do Windows; o laço modal termina ao soltar).
+#[cfg(windows)]
+fn drag_out(frame: &eframe::Frame, path: &str) {
+    let mut png = vec![];
+    let mut im = image::RgbaImage::new(48, 48);
+    for (x, y, px) in im.enumerate_pixels_mut() {
+        let (dx, dy) = ((x as f32 - 23.5).abs() - 14.0, (y as f32 - 23.5).abs() - 17.0);
+        let d = dx.max(0.0).hypot(dy.max(0.0)) + dx.max(dy).min(0.0) - 4.0;
+        let a = (0.5 - d).clamp(0.0, 1.0);
+        *px = image::Rgba([245, 245, 245, (a * 235.0) as u8]);
+    }
+    let _ = image::DynamicImage::ImageRgba8(im).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png);
+    let _ = drag::start_drag(frame, drag::DragItem::Files(vec![std::path::PathBuf::from(path)]), drag::Image::Raw(png), |_, _| {}, drag::Options::default());
+}
+#[cfg(not(windows))]
+fn drag_out(_frame: &eframe::Frame, _path: &str) {}
