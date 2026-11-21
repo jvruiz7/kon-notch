@@ -42,6 +42,7 @@ pub struct State {
     pub listening: bool,
     pub approvals: bool,
     pub just_done: Option<Instant>,
+    pub just_note: bool,
 }
 pub type Shared = Arc<Mutex<State>>;
 
@@ -163,7 +164,7 @@ fn on_event(g: &mut State, name: &str, ev: &Value) {
                 l.plus += lines_of(new); l.minus += lines_of(old); l.stage = l.stage.max(1);
             } else if tool == "Bash" && is_test(i["command"].as_str().unwrap_or("")) { l.stage = l.stage.max(2); }
         }
-        "Notification" => { l.note = ev["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("O Claude precisa de você").to_string(); }
+        "Notification" => { g.just_note = true; let l = &mut g.live; l.note = ev["message"].as_str().filter(|m| !m.is_empty()).unwrap_or("O Claude precisa de você").to_string(); }
         "Stop" => if l.status != Status::Idle { l.status = Status::Done; l.stage = 3; l.done_at = Some(now); l.note.clear(); g.just_done = Some(now); },
         _ => {}
     }

@@ -164,6 +164,35 @@ mod imp {
         }
     }
 
+    /// Fotografa o monitor onde está o mouse (pixels físicos, RGBA). Devolve (largura, altura, pixels, x, y do monitor).
+    pub fn capture_screen() -> Option<(u32, u32, Vec<u8>, i32, i32)> {
+        use windows::Win32::Graphics::Gdi::*;
+        unsafe {
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            let m = MonitorFromPoint(pt, windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST);
+            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            if !GetMonitorInfoW(m, &mut mi).as_bool() { return None; }
+            let r = mi.rcMonitor;
+            let (w, h) = (r.right - r.left, r.bottom - r.top);
+            let screen = GetDC(None);
+            let mem = CreateCompatibleDC(Some(screen));
+            let bmp = CreateCompatibleBitmap(screen, w, h);
+            let old = SelectObject(mem, bmp.into());
+            let _ = BitBlt(mem, 0, 0, w, h, Some(screen), r.left, r.top, SRCCOPY | CAPTUREBLT);
+            let mut bi = BITMAPINFO { bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() }, ..Default::default() };
+            let mut buf = vec![0u8; (w * h * 4) as usize];
+            let lines = GetDIBits(mem, bmp, 0, h as u32, Some(buf.as_mut_ptr() as *mut _), &mut bi, DIB_RGB_COLORS);
+            SelectObject(mem, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(mem);
+            ReleaseDC(None, screen);
+            if lines == 0 { return None; }
+            for px in buf.chunks_exact_mut(4) { px.swap(0, 2); px[3] = 255; } // BGRA → RGBA
+            Some((w as u32, h as u32, buf, r.left, r.top))
+        }
+    }
+
     /// Esconde o Kon da barra de tarefas e do Alt+Tab, e o mantém acima de tudo.
     pub fn make_tool_window() {
         if let Some(h) = hwnd() {
@@ -208,6 +237,7 @@ mod imp {
     pub fn set_visible(_on: bool) {}
     pub fn set_autostart(_on: bool) -> bool { false }
     pub fn master_volume() -> Option<(u32, bool)> { None }
+    pub fn capture_screen() -> Option<(u32, u32, Vec<u8>, i32, i32)> { None }
     pub fn set_focusable(_on: bool) {}
     pub fn data_dir() -> std::path::PathBuf { std::env::temp_dir().join("kon-nativo") }
 }

@@ -2,6 +2,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod ai;
+mod calendar;
 mod claude;
 mod clipboard;
 mod hotkeys;
@@ -12,13 +13,16 @@ mod lyrics;
 mod media;
 mod tasks;
 mod translate;
+mod updater;
 mod usage;
 mod weather;
 mod platform;
 mod quick;
 mod reminders;
+mod report;
 mod secrets;
 mod settings;
+mod sounds;
 mod stash;
 mod system;
 mod ui;

@@ -43,11 +43,12 @@ pub struct Settings {
     pub loc_id: String,
     pub lyrics_on: bool,
     pub focus_log: Vec<(i64, u32)>,
+    pub auto_start: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into(), display: "primary".into(), dnd: false, locked: false, privacy: false, page_order: ["home","files","clip","music","weather","focus","todo","claude","quick","system","water"].iter().map(|s| s.to_string()).collect(), pages_off: vec![], provider: "gemini".into(), gemini_model: "gemini-flash-latest".into(), claude_model: "claude-haiku-5-5".into(), web_search: true, gemini_key_enc: String::new(), anthropic_key_enc: String::new(), outfit: "auto".into(), accent: "aurora".into(), glow: 1.0, notch_size: "normal".into(), hide_fullscreen: true, slim_over_max: true, hide_in_capture: true, sounds_on: true, sound_pack: "retro".into(), sound_vol: 0.6, focus_dnd: true, ics_url: String::new(), onboarded: false, auto_update: true, loc_id: "auto".into(), lyrics_on: true, focus_log: vec![] }
+        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into(), display: "primary".into(), dnd: false, locked: false, privacy: false, page_order: ["home","files","clip","music","weather","focus","todo","claude","quick","system","water"].iter().map(|s| s.to_string()).collect(), pages_off: vec![], provider: "gemini".into(), gemini_model: "gemini-flash-latest".into(), claude_model: "claude-haiku-5-5".into(), web_search: true, gemini_key_enc: String::new(), anthropic_key_enc: String::new(), outfit: "auto".into(), accent: "aurora".into(), glow: 1.0, notch_size: "normal".into(), hide_fullscreen: true, slim_over_max: true, hide_in_capture: true, sounds_on: true, sound_pack: "retro".into(), sound_vol: 0.6, focus_dnd: true, ics_url: String::new(), onboarded: false, auto_update: true, loc_id: "auto".into(), lyrics_on: true, focus_log: vec![], auto_start: true }
     }
 }
 

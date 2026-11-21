@@ -11,7 +11,7 @@ const MAX: usize = 40;
 pub struct Clip { pub id: u64, pub text: String, pub at: i64, pub pinned: bool }
 
 #[derive(Default)]
-pub struct State { pub list: Vec<Clip>, pub on: bool, last: String, skip_next: Option<String>, suspend_until: Option<std::time::Instant> }
+pub struct State { pub list: Vec<Clip>, pub on: bool, pub key_offer: Option<String>, last: String, skip_next: Option<String>, suspend_until: Option<std::time::Instant> }
 
 pub type Shared = Arc<Mutex<State>>;
 
@@ -57,6 +57,10 @@ pub fn start(on: bool, repaint: impl Fn() + Send + 'static) -> Shared {
             if t == g.last { continue; }
             g.last = t.clone();
             if g.skip_next.take().as_deref() == Some(t.as_str()) { continue; }
+            // chave copiada do AI Studio ou do Console da Anthropic: o Kon oferece usar (a chave em si não fica aqui)
+            let tt = t.trim();
+            if crate::secrets::valid("gemini", tt) { g.key_offer = Some("gemini".into()); drop(g); repaint(); continue; }
+            if crate::secrets::valid("anthropic", tt) { g.key_offer = Some("anthropic".into()); drop(g); repaint(); continue; }
             if !g.on || t.trim().is_empty() || t.len() > 20000 || looks_secret(&t) { continue; }
             g.list.retain(|x| x.text != t);
             let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
