@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A1A22"/><stop offset="1" stop-color="#050507"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#16B8E0"/><stop offset="1" stop-color="#9B3BEF"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.7" stop-color="#FAFAFC"/><stop offset="1" stop-color="#E4E4EC"/>
+    </linearGradient>
+    <filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="32"/></filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="18"/></filter>
+    <clipPath id="sq"><rect x="40" y="40" width="944" height="944" rx="228"/></clipPath>
+  </defs>
+  <rect x="40" y="40" width="944" height="944" rx="228" fill="url(#bg)"/>
+  <g clip-path="url(#sq)">
+    <ellipse cx="512" cy="752" rx="250" ry="38" fill="url(#glow)" opacity="0.95" filter="url(#blur)"/>
+  </g>
+  <rect x="40.5" y="40.5" width="943" height="943" rx="227.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08" stroke-width="3"/>
+  <!-- sombra do tofu -->
+  <rect x="242" y="320" width="540" height="436" rx="160" fill="#000" opacity="0.55" filter="url(#shadow)"/>
+  <!-- tofu -->
+  <rect x="242" y="290" width="540" height="436" rx="160" fill="url(#body)"/>
+  <!-- olhinhos -->
+  <rect x="367" y="462" width="74" height="92" rx="37" fill="#111114"/>
+  <rect x="583" y="462" width="74" height="92" rx="37" fill="#111114"/>
+  <!-- brilho nos olhos -->
+  <circle cx="392" cy="487" r="11" fill="#fff" opacity="0.9"/>
+  <circle cx="608" cy="487" r="11" fill="#fff" opacity="0.9"/>
+</svg>
