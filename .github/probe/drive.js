@@ -33,7 +33,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(1500);
   await run(`[void][M]::SetProcessDPIAware()`);
   const title = await page.title();
-  const wr = (await run(`$ids=[uint32[]]@(Get-Process electron | ForEach-Object { $_.Id }); Write-Output ("WR=" + [M]::Biggest($ids))`)).match(/WR=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/).slice(1).map(Number);
+  const wr = (await run(`$ids=[uint32[]]@(Get-Process Kon,electron -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }); Write-Output ("WR=" + [M]::Biggest($ids))`)).match(/WR=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/).slice(1).map(Number);
   const win = await page.evaluate(() => ({ x: window.screenX, y: window.screenY, w: innerWidth, h: innerHeight, dpr: devicePixelRatio, sw: screen.width }));
   log("janela", JSON.stringify(win), "retângulo físico:", wr.join(","), "foreground:", await fg());
   const kx = (wr[2] - wr[0]) / win.w, ky = (wr[3] - wr[1]) / win.h;

@@ -127,7 +127,7 @@ jobs:
           Write-Host 'Tudo certo no Windows.'
 
   ui-windows:
-    # cliques REAIS do sistema na interface instalada, a 100% e a 125%; a versão só sai se todos responderem
+    # cliques REAIS do sistema na interface instalada (Kon.exe), a 100% e a 125%; a versão só sai se todos responderem
     needs: build
     if: needs.build.outputs.skip != '1'
     runs-on: windows-latest
