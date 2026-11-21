@@ -1,8 +1,10 @@
 //! Kon nativo: o notch do Windows escrito em Rust, desenhado pela placa de vídeo, sem motor web.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod ai;
 mod claude;
 mod clipboard;
+mod hotkeys;
 mod icons;
 mod inuse;
 mod media;
@@ -11,6 +13,7 @@ mod usage;
 mod weather;
 mod platform;
 mod quick;
+mod secrets;
 mod settings;
 mod stash;
 mod system;

@@ -67,3 +67,7 @@ pub const EYE_OFF: char = '\u{e0bb}';
 pub const GRIP_HORIZONTAL: char = '\u{e0ea}';
 pub const MIC: char = '\u{e118}';
 pub const CAMERA: char = '\u{e064}';
+pub const COPY: char = '\u{e09e}';
+pub const KEY_ROUND: char = '\u{e4a3}';
+pub const GLOBE: char = '\u{e0e8}';
+pub const SQUARE: char = '\u{e167}';

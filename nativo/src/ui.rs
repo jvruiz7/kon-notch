@@ -9,6 +9,9 @@ use crate::tasks::Tasks;
 use crate::weather::{self, Weather};
 use crate::system::{self, SysInfo};
 use crate::clipboard;
+use crate::ai;
+use crate::hotkeys::{self, Hot};
+use crate::secrets;
 use crate::inuse::{self, InUse};
 use crate::usage;
 use crate::quick::{self, Quick};
@@ -30,7 +33,7 @@ const DAYS: [&str; 7] = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum View { Compact, Panel, Perm, Sheet }
+enum View { Compact, Panel, Perm, Sheet, Ask }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Sleep, Lock, Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
@@ -105,6 +108,13 @@ pub struct KonApp {
     inuse: Arc<Mutex<InUse>>,
     sheet_pages: bool,
     drag_page: Option<(usize, f32)>,
+    ask: ai::Shared,
+    ask_q: String,
+    ask_rows: f32,
+    hot: std::sync::mpsc::Receiver<Hot>,
+    key_in: [String; 2],
+    model_in: [String; 2],
+    copied_at: Option<Instant>,
     art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
@@ -136,7 +146,7 @@ impl KonApp {
             page: Page::from(&std::env::var("KON_PAGE").unwrap_or_else(|_| settings.page.clone())),
             settings, media,
             // KON_DEMO=painel abre já com o painel (só para capturas de teste)
-            view: match std::env::var("KON_DEMO").as_deref() { Ok("painel") => View::Panel, Ok("ajustes") => View::Sheet, _ => View::Compact },
+            view: match std::env::var("KON_DEMO").as_deref() { Ok("painel") => View::Panel, Ok("ajustes") => View::Sheet, Ok("perguntar") => View::Ask, _ => View::Compact },
             w: Spring::new(COMPACT.x), h: Spring::new(COMPACT.y),
             hit, passthrough: true,
             hover_since: None, leave_since: None,
@@ -144,7 +154,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -155,6 +165,10 @@ impl KonApp {
             View::Panel => PANEL,
             View::Perm => vec2(470.0, 100.0),
             View::Sheet => vec2(440.0, 470.0),
+            View::Ask => {
+                let g = self.ask.lock().unwrap();
+                if g.phase == ai::Phase::Idle { vec2(540.0, 46.0) } else { vec2(540.0, (46.0 + 44.0 + 24.0 + self.ask_rows * 18.0 + if g.sources.is_empty() { 0.0 } else { 30.0 }).clamp(160.0, 360.0)) }
+            }
             View::Compact => if let Some((t, _, _)) = self.ctoast.as_ref().filter(|c| c.1.elapsed() < Duration::from_secs(5)) { vec2((t.chars().count() as f32 * 6.6 + 78.0).clamp(220.0, 520.0), 36.0) } else if self.claude_busy() { vec2(300.0, 36.0) } else if m.active && m.playing { COMPACT_MUSIC } else { COMPACT },
         }
     }
@@ -249,7 +263,21 @@ impl eframe::App for KonApp {
 
         // teclado só enquanto há um campo de texto aberto
         if self.view == View::Sheet && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.view = View::Panel; }
-        let want_focus = ((self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel) || self.view == View::Sheet;
+        if self.view == View::Ask && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.view = View::Compact; }
+        while let Ok(h) = self.hot.try_recv() {
+            match h {
+                Hot::Ask => self.open_ask(),
+                Hot::Panel => { self.view = if self.view == View::Panel { View::Compact } else { View::Panel }; }
+                Hot::Clip => { self.page = Page::Clip; self.view = View::Panel; }
+            }
+        }
+        // terminou de responder: soma os tokens do chat do Kon e guarda o modelo que funcionou
+        {
+            let mut g = self.ask.lock().unwrap();
+            if g.phase == ai::Phase::Done && g.tokens > 0 { ai::add_kon_tokens(g.tokens); g.tokens = 0; }
+            if let Some(m) = g.new_model.take() { self.settings.gemini_model = m; self.settings.save(); }
+        }
+        let want_focus = ((self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel) || self.view == View::Sheet || self.view == View::Ask;
         if want_focus != self.focusable { self.focusable = want_focus; crate::platform::set_focusable(want_focus); }
         if self.view == View::Compact { self.adding = None; self.editing = false; self.qform = None; self.qedit = false; }
         // aviso de PC sobrecarregado vindo da thread do sistema
@@ -271,7 +299,12 @@ impl eframe::App for KonApp {
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
             let rect = self.island_rect();
-            draw_island(ui.painter(), rect, self.view);
+            if self.view == View::Ask {
+                let rad = (rect.height() / 2.0).min(26.0) as u8;
+                ui.painter().rect_filled(rect.translate(vec2(0.0, 10.0)).expand(6.0), CornerRadius::same(rad + 6), Color32::from_black_alpha(60));
+                ui.painter().rect_filled(rect, CornerRadius::same(rad), BG);
+                ui.painter().rect_stroke(rect, CornerRadius::same(rad), Stroke::new(1.0_f32, Color32::from_white_alpha(31)), egui::StrokeKind::Inside);
+            } else { draw_island(ui.painter(), rect, self.view); }
             let open = ((self.h.v - COMPACT.y) / (PANEL.y - COMPACT.y)).clamp(0.0, 1.0);
             if self.view == View::Perm || (self.w.v > 400.0 && self.h.v < 120.0) {
                 let a = ((self.h.v - COMPACT.y) / (100.0 - COMPACT.y)).clamp(0.0, 1.0);
@@ -279,7 +312,9 @@ impl eframe::App for KonApp {
             } else if open < 0.35 {
                 self.draw_compact(ui, rect, &m, blink, 1.0 - open / 0.35);
             }
-            if self.view == View::Sheet {
+            if self.view == View::Ask {
+                self.draw_ask(ui, rect, blink);
+            } else if self.view == View::Sheet {
                 let a = ((self.h.v - 300.0) / 170.0).clamp(0.0, 1.0);
                 if a > 0.3 { self.draw_sheet(ui, rect, (a - 0.3) / 0.7); }
             } else if open > 0.55 && !(self.h.v > PANEL.y + 20.0) {
@@ -307,7 +342,8 @@ impl eframe::App for KonApp {
 impl KonApp {
     fn island_rect(&self) -> Rect {
         let w = self.w.v; let h = self.h.v;
-        Rect::from_min_size(pos2((WIN_W - w) / 2.0, 0.0), vec2(w, h))
+        // Perguntar flutua 12 px abaixo do topo, como no Kon atual
+        Rect::from_min_size(pos2((WIN_W - w) / 2.0, if self.view == View::Ask { 12.0 } else { 0.0 }), vec2(w, h))
     }
 
     fn draw_compact(&mut self, ui: &mut egui::Ui, r: Rect, m: &MediaState, blink: bool, alpha: f32) {
@@ -475,7 +511,13 @@ impl KonApp {
         let timer = self.focus.running_until.is_some();
         let pulse = if playing || timer { 0.7 + 0.3 * (ui.input(|i| i.time) as f32 * 4.5).cos() } else { 1.0 };
         let dc = if playing { Color32::from_rgb(52, 211, 153) } else if timer { Color32::from_rgb(192, 132, 252) } else { Color32::from_white_alpha(64) };
-        p.circle_filled(pos2(bar.right() - 6.0, bar.center().y), 3.0, fade(dc, alpha * pulse));
+        p.circle_filled(pos2(bar.right() - 40.0, bar.center().y), 3.0, fade(dc, alpha * pulse));
+        let sr = Rect::from_center_size(pos2(bar.right() - 14.0, bar.center().y), vec2(28.0, 28.0));
+        let srsp = ui.interact(sr, ui.id().with("asknav"), Sense::click()).on_hover_text("Perguntar ao Kon (Ctrl+Alt+Space)");
+        let p = ui.painter();
+        p.circle_filled(sr.center(), 14.0, fade(Color32::from_white_alpha(if srsp.hovered() { 30 } else { 16 }), alpha));
+        p.text(sr.center(), Align2::CENTER_CENTER, ic::SEARCH, icon_font(13.0), fade(Color32::from_white_alpha(180), alpha));
+        if srsp.clicked() { self.open_ask(); }
     }
 
     /// Páginas na ordem escolhida em Configurações → Pages (as novas entram no fim, ligadas).
@@ -487,6 +529,112 @@ impl KonApp {
     }
     fn visible_pages(&self) -> Vec<Page> {
         self.page_ids().iter().filter(|id| !self.settings.pages_off.contains(id)).map(|id| Page::from(id)).collect()
+    }
+
+    fn open_ask(&mut self) {
+        ai::cancel(&self.ask);
+        self.ask_q.clear(); self.ask_rows = 0.0;
+        self.view = View::Ask;
+    }
+    fn key_for(&self, provider: &str) -> String {
+        secrets::unprotect(if provider == "claude" { &self.settings.anthropic_key_enc } else { &self.settings.gemini_key_enc })
+    }
+    fn submit_ask(&mut self, ctx: &egui::Context) {
+        let q = self.ask_q.trim().to_string();
+        if q.is_empty() { return; }
+        self.ask_q.clear();
+        let pv = self.settings.provider.clone();
+        let req = ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: pv == "gemini" && self.settings.web_search, provider: pv };
+        let c = ctx.clone();
+        ai::ask(&self.ask, q, req, move || c.request_repaint());
+    }
+
+    fn draw_ask(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
+        let p = ui.painter().clone();
+        let st = self.ask.lock().unwrap().clone();
+        let pv = self.settings.provider.clone();
+        let pname = if pv == "claude" { "Claude" } else { "Gemini" };
+        let hy = r.top() + 23.0;
+        draw_tofu_mood(&p, pos2(r.left() + 30.0, hy), 0.82, blink, 1.0, st.error.is_some());
+        // botões à direita
+        let mut bx = r.right() - 10.0;
+        let send = Rect::from_min_size(pos2(bx - 28.0, hy - 14.0), vec2(28.0, 28.0));
+        let srsp = ui.interact(send, ui.id().with("asksend"), Sense::click());
+        if srsp.hovered() { p.circle_filled(send.center(), 14.0, Color32::from_white_alpha(25)); }
+        p.text(send.center(), Align2::CENTER_CENTER, ic::SEARCH, icon_font(15.0), Color32::from_white_alpha(if srsp.hovered() { 255 } else { 178 }));
+        bx = send.left() - 6.0;
+        let pw = text_w(ui, pname, 10.5) + 16.0;
+        let pr = Rect::from_min_size(pos2(bx - pw, hy - 12.0), vec2(pw, 24.0));
+        let prsp = ui.interact(pr, ui.id().with("askprov"), Sense::click()).on_hover_text("Alternar IA");
+        p.rect_filled(pr, CornerRadius::same(12), Color32::from_white_alpha(if prsp.hovered() { 38 } else { 20 }));
+        p.text(pr.center(), Align2::CENTER_CENTER, pname, bold(10.5), Color32::from_white_alpha(178));
+        if prsp.clicked() { self.settings.provider = if pv == "claude" { "gemini".into() } else { "claude".into() }; self.settings.save(); }
+        // campo
+        let fr = Rect::from_min_max(pos2(r.left() + 52.0, hy - 11.0), pos2(pr.left() - 10.0, hy + 11.0));
+        let hint = if st.phase == ai::Phase::Idle { "Pergunte ao Kon" } else { "Pergunte de novo" };
+        let te = egui::TextEdit::singleline(&mut self.ask_q).hint_text(egui::RichText::new(hint).color(Color32::from_white_alpha(90))).frame(false).font(FontId::proportional(14.5)).text_color(Color32::WHITE).desired_width(fr.width());
+        let resp = ui.put(fr, te);
+        if !resp.has_focus() && ui.memory(|m| m.focused().is_none()) { resp.request_focus(); }
+        let enter = (resp.lost_focus() || resp.has_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if std::env::var("KON_DEBUG").is_ok() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { .. }))) { eprintln!("keys: focus={} lost={} enter={}", resp.has_focus(), resp.lost_focus(), enter); }
+        if enter || srsp.clicked() { self.submit_ask(ui.ctx()); resp.request_focus(); }
+        if st.phase == ai::Phase::Idle { return; }
+        // resposta
+        let body = Rect::from_min_max(pos2(r.left() + 20.0, r.top() + 46.0), pos2(r.right() - 20.0, r.bottom() - 42.0));
+        let pc = p.with_clip_rect(body);
+        pc.text(pos2(body.left(), body.top() + 6.0), Align2::LEFT_CENTER, ellipsize_w(ui, &st.question, 11.5, body.width()), FontId::proportional(11.5), Color32::from_white_alpha(102));
+        let mut y = body.top() + 16.0;
+        let mut rows = 0.0;
+        let text = if st.phase == ai::Phase::Thinking { "Pensando…".to_string() } else { st.answer.clone() };
+        for (i, line) in text.split('\n').enumerate() {
+            if line.trim().is_empty() { y += 8.0; rows += 0.45; continue; }
+            let col = if st.error.is_some() { Color32::from_rgba_unmultiplied(253, 230, 138, 230) } else if i == 0 { Color32::WHITE } else { Color32::from_white_alpha(217) };
+            let font = if i == 0 && st.error.is_none() { bold(12.5) } else { FontId::proportional(12.5) };
+            let mut job = egui::text::LayoutJob::single_section(line.to_string(), egui::TextFormat { font_id: font, color: col, line_height: Some(18.0), ..Default::default() });
+            job.wrap.max_width = body.width();
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            let n = g.rows.len() as f32;
+            pc.galley(pos2(body.left(), y), g, col);
+            y += n * 18.0; rows += n;
+        }
+        if st.phase == ai::Phase::Streaming || st.phase == ai::Phase::Thinking {
+            let on = (ui.input(|i| i.time) * 2.5).fract() < 0.5;
+            if on { pc.rect_filled(Rect::from_min_size(pos2(body.left(), y + 2.0), vec2(6.0, 14.0)), CornerRadius::same(2), Color32::from_rgba_unmultiplied(165, 180, 252, 204)); }
+            ui.ctx().request_repaint_after(Duration::from_millis(120));
+        }
+        // fontes da busca do Google
+        if !st.sources.is_empty() {
+            let mut sx = body.left(); let sy = y + 14.0;
+            for (i, (url, title)) in st.sources.iter().enumerate() {
+                let t = ellipsize_w(ui, title, 10.5, 130.0);
+                let w = text_w(ui, &t, 10.5) + 30.0;
+                if sx + w > body.right() { break; }
+                let sr = Rect::from_min_size(pos2(sx, sy - 11.0), vec2(w, 22.0));
+                let rsp = ui.interact(sr.intersect(body), ui.id().with(("src", i)), Sense::click()).on_hover_text(url);
+                pc.rect_filled(sr, CornerRadius::same(11), Color32::from_white_alpha(if rsp.hovered() { 36 } else { 18 }));
+                pc.text(pos2(sr.left() + 9.0, sy), Align2::LEFT_CENTER, format!("{}", i + 1), FontId::proportional(10.5), Color32::from_rgba_unmultiplied(125, 211, 252, 204));
+                pc.text(pos2(sr.left() + 20.0, sy), Align2::LEFT_CENTER, t, FontId::proportional(10.5), Color32::from_white_alpha(178));
+                if rsp.clicked() { let _ = quick::open_shell(url); }
+                sx += w + 4.0;
+            }
+        }
+        self.ask_rows = rows;
+        // rodapé
+        let fy = r.bottom() - 21.0;
+        let label = format!("{pname}{}{}", if pv == "gemini" && self.settings.web_search { " + Google Search" } else { "" },
+            st.fell_back.as_ref().map_or(" · Enter para continuar".to_string(), |(a, b)| format!(" · {a} indisponível, usei {b}")));
+        let mut rx = r.right() - 16.0;
+        if small_pill(ui, &p, &mut rx, fy, Some(ic::PLUS), "Novo chat", false, 1.0) { self.open_ask(); }
+        if st.error.as_ref().map_or(false, |e| e.0 == "NO_KEY") {
+            if small_pill(ui, &p, &mut rx, fy, Some(ic::KEY_ROUND), "Configurar", false, 1.0) { self.view = View::Sheet; self.sheet_pages = false; self.sheet_scroll = 0.0; }
+        } else {
+            let copied = self.copied_at.map_or(false, |t| t.elapsed() < Duration::from_millis(1500));
+            if small_pill(ui, &p, &mut rx, fy, Some(if copied { ic::CHECK } else { ic::COPY }), "Copiar", false, 1.0) {
+                ui.ctx().copy_text(st.answer.clone()); self.copied_at = Some(Instant::now());
+            }
+            if copied { ui.ctx().request_repaint_after(Duration::from_millis(300)); }
+        }
+        p.text(pos2(r.left() + 16.0, fy), Align2::LEFT_CENTER, ellipsize_w(ui, &label, 11.0, rx - r.left() - 24.0), FontId::proportional(11.0), Color32::from_white_alpha(102));
     }
 
     fn page_sleep(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
@@ -815,7 +963,7 @@ impl KonApp {
             p.text(pos2(c3.left() + 22.0, y), Align2::LEFT_CENTER, format!("{} {}%", m.0, m.2), FontId::proportional(11.0), dim(255));
         }
         let ss = u.sessions_today;
-        p.text(pos2(c3.left() + 10.0, c3.bottom() - 14.0), Align2::LEFT_CENTER, format!("{ss} {} hoje", if ss == 1 { "sessão" } else { "sessões" }), FontId::proportional(10.0), dim(115));
+        p.text(pos2(c3.left() + 10.0, c3.bottom() - 14.0), Align2::LEFT_CENTER, format!("{ss} {} hoje · chat do Kon {}", if ss == 1 { "sessão" } else { "sessões" }, usage::fmt_tok(ai::kon_tokens_today())), FontId::proportional(10.0), dim(115));
     }
 
     fn draw_sheet(&mut self, ui: &mut egui::Ui, r: Rect, alpha: f32) {
@@ -839,6 +987,75 @@ impl KonApp {
         let dim = |a: u8| fade(Color32::from_white_alpha(a), alpha);
         let section = |y: &mut f32, t: &str| { pc.text(pos2(area.left(), *y + 9.0), Align2::LEFT_CENTER, t, bold(10.5), dim(102)); *y += 24.0; };
         let row_bg = |y: f32, h: f32| { let rr = Rect::from_min_size(pos2(area.left(), y), vec2(w, h)); pc.rect_filled(rr, CornerRadius::same(12), dim(10)); rr };
+        // IA
+        section(&mut y, "IA");
+        let rr = row_bg(y, 36.0);
+        pc.text(pos2(rr.left() + 12.0, rr.center().y), Align2::LEFT_CENTER, "IA padrão", bold(11.5), dim(255));
+        let mut pv = self.settings.provider.clone();
+        let opts: [(&str, String); 2] = [("Gemini", "gemini".into()), ("Claude", "claude".into())];
+        if area.contains(pos2(rr.right() - 30.0, rr.center().y)) && seg(ui, &pc, pos2(rr.right() - 8.0, rr.center().y), &opts, &mut pv, alpha, "prov") { self.settings.provider = pv; self.settings.save(); }
+        y += 42.0;
+        for (k, (prov, label, hint, link)) in [("gemini", "GEMINI_API_KEY", "AQ.… ou AIza…", "https://aistudio.google.com/apikey"), ("anthropic", "ANTHROPIC_API_KEY", "sk-ant-…", "https://console.anthropic.com/settings/keys")].into_iter().enumerate() {
+            let has = !(if k == 0 { &self.settings.gemini_key_enc } else { &self.settings.anthropic_key_enc }).is_empty();
+            pc.text(pos2(area.left(), y + 8.0), Align2::LEFT_CENTER, label, FontId::monospace(10.5), dim(140));
+            let lr = Rect::from_min_size(pos2(area.right() - 70.0, y), vec2(70.0, 16.0));
+            let lrsp = ui.interact(lr.intersect(area), ui.id().with(("keylink", k)), Sense::click());
+            pc.text(pos2(area.right(), y + 8.0), Align2::RIGHT_CENTER, "Criar chave", FontId::proportional(10.5), fade(Color32::from_rgba_unmultiplied(125, 211, 252, if lrsp.hovered() { 255 } else { 178 }), alpha));
+            if lrsp.clicked() { let _ = quick::open_shell(link); }
+            y += 20.0;
+            let fr = Rect::from_min_size(pos2(area.left(), y), vec2(w, 32.0));
+            pc.rect_filled(fr, CornerRadius::same(8), dim(15));
+            pc.rect_stroke(fr, CornerRadius::same(8), Stroke::new(1.0_f32, dim(20)), egui::StrokeKind::Inside);
+            let mut bx = fr.right() - 6.0;
+            if has {
+                pc.text(pos2(fr.left() + 10.0, fr.center().y), Align2::LEFT_CENTER, ic::CHECK, icon_font(12.0), fade(Color32::from_rgb(74, 222, 128), alpha));
+                pc.text(pos2(fr.left() + 28.0, fr.center().y), Align2::LEFT_CENTER, "Chave salva e criptografada", FontId::proportional(12.0), dim(204));
+                if area.contains(fr.center()) && small_pill(ui, &pc, &mut bx, fr.center().y, None, "Remover", false, alpha) {
+                    if k == 0 { self.settings.gemini_key_enc.clear() } else { self.settings.anthropic_key_enc.clear() }
+                    self.settings.save();
+                }
+            } else if area.contains(fr.center()) {
+                let save = small_pill(ui, &pc, &mut bx, fr.center().y, None, "Salvar", true, alpha);
+                let ir = Rect::from_min_max(pos2(fr.left() + 10.0, fr.top() + 7.0), pos2(bx - 6.0, fr.bottom() - 7.0));
+                let te = egui::TextEdit::singleline(&mut self.key_in[k]).password(true).hint_text(hint).frame(false).font(FontId::monospace(11.5)).desired_width(ir.width());
+                let resp = ui.put(ir, te);
+                let enter = (resp.lost_focus() || resp.has_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if save || enter {
+                    let v = self.key_in[k].trim().to_string();
+                    if secrets::valid(prov, &v) {
+                        let enc = secrets::protect(&v);
+                        if enc.is_empty() { self.toast("Não consegui criptografar a chave"); }
+                        else { if k == 0 { self.settings.gemini_key_enc = enc } else { self.settings.anthropic_key_enc = enc } self.settings.save(); self.toast("Chave salva"); }
+                    } else if !v.is_empty() { self.toast("Esse não parece o formato da chave"); }
+                    self.key_in[k].clear(); // nunca fica na memória da tela
+                }
+            }
+            y += 40.0;
+        }
+        pc.text(pos2(area.left(), y), Align2::LEFT_CENTER, "Chaves criptografadas pelo Windows (DPAPI), só neste computador.", FontId::proportional(10.0), dim(90));
+        y += 18.0;
+        let half = (w - 8.0) / 2.0;
+        for (k, label) in ["Modelo Gemini", "Modelo Claude"].iter().enumerate() {
+            let x = area.left() + k as f32 * (half + 8.0);
+            pc.text(pos2(x, y + 8.0), Align2::LEFT_CENTER, *label, FontId::proportional(10.5), dim(140));
+            let fr = Rect::from_min_size(pos2(x, y + 20.0), vec2(half, 32.0));
+            pc.rect_filled(fr, CornerRadius::same(8), dim(15));
+            if area.contains(fr.center()) {
+                if self.model_in[k].is_empty() { self.model_in[k] = if k == 0 { self.settings.gemini_model.clone() } else { self.settings.claude_model.clone() }; }
+                let te = egui::TextEdit::singleline(&mut self.model_in[k]).frame(false).font(FontId::monospace(11.5)).desired_width(half - 20.0);
+                let resp = ui.put(fr.shrink2(vec2(10.0, 7.0)), te);
+                if resp.lost_focus() || (resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                    let v = self.model_in[k].trim().to_string();
+                    if !v.is_empty() { if k == 0 { self.settings.gemini_model = v } else { self.settings.claude_model = v } self.settings.save(); }
+                }
+            }
+        }
+        y += 60.0;
+        let rr = row_bg(y, 36.0);
+        pc.text(pos2(rr.left() + 12.0, rr.center().y), Align2::LEFT_CENTER, ic::GLOBE, icon_font(13.0), fade(Color32::from_rgba_unmultiplied(125, 211, 252, 204), alpha));
+        pc.text(pos2(rr.left() + 32.0, rr.center().y), Align2::LEFT_CENTER, "Busca Google no Gemini (com fontes)", bold(11.5), dim(255));
+        if area.contains(pos2(rr.right() - 30.0, rr.center().y)) && toggle_c(ui, &pc, pos2(rr.right() - 30.0, rr.center().y), self.settings.web_search, alpha, Color32::from_rgb(16, 185, 129)).clicked() { self.settings.web_search = !self.settings.web_search; self.settings.save(); }
+        y += 50.0;
         // CLAUDE CODE
         section(&mut y, "CLAUDE CODE");
         let rr = row_bg(y, 44.0);
@@ -906,6 +1123,7 @@ impl KonApp {
         y += 20.0;
         let total = y + self.sheet_scroll - area.top();
         self.sheet_scroll = self.sheet_scroll.clamp(0.0, (total - area.height()).max(0.0));
+        self.draw_toast(ui, r, inner, alpha);
     }
 
     fn sheet_pages_list(&mut self, ui: &mut egui::Ui, area: Rect, alpha: f32) {
@@ -1631,7 +1849,7 @@ fn claude_elapsed(l: &claude::Live) -> f32 {
 fn small_pill(ui: &mut egui::Ui, p: &egui::Painter, rx: &mut f32, cy: f32, icon: Option<char>, label: &str, primary: bool, a: f32) -> bool {
     let w = text_w(ui, label, 11.0) + if icon.is_some() { 34.0 } else { 24.0 };
     let r = Rect::from_min_size(pos2(*rx - w, cy - 12.0), vec2(w, 24.0));
-    let resp = ui.interact(r, ui.id().with(("sp", label)), Sense::click());
+    let resp = ui.interact(r, ui.id().with(("sp", label, (r.min.x as i32, r.min.y as i32))), Sense::click());
     let bg = if primary { Color32::WHITE } else { Color32::from_white_alpha(if resp.hovered() { 30 } else { 18 }) };
     let fg = if primary { Color32::BLACK } else { Color32::WHITE };
     p.rect_filled(r, CornerRadius::same(12), fade(bg, a));

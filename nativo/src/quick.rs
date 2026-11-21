@@ -44,7 +44,7 @@ pub fn run(q: &Quick) -> Result<(), String> {
     }
 }
 
-fn open_shell(target: &str) -> Result<(), String> {
+pub fn open_shell(target: &str) -> Result<(), String> {
     #[cfg(windows)]
     {
         use windows::core::{HSTRING, PCWSTR};
