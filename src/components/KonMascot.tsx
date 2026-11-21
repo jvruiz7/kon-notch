@@ -1,4 +1,4 @@
-import React, { createContext, useContext } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 /**
@@ -32,6 +32,17 @@ function Arc({ s, down = false }: { s: number; down?: boolean }) {
   );
 }
 
+function useBlink(every: number) {
+  const [b, setB] = useState(false);
+  useEffect(() => {
+    let t1: any, t2: any;
+    const loop = () => { t1 = setTimeout(() => { setB(true); t2 = setTimeout(() => { setB(false); loop(); }, 140); }, every * (0.75 + Math.random() * 0.5)); };
+    loop();
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [every]);
+  return b;
+}
+
 function EyePair({ mood, s }: { mood: TofuMood; s: number }) {
   const gap = 5.2 * s;
   if (mood === "done" || mood === "music" || mood === "eating") {
@@ -50,6 +61,8 @@ function EyePair({ mood, s }: { mood: TofuMood; s: number }) {
       </div>
     );
   }
+  // piscar por tempo (só anima ~150 ms a cada 4 s); animação contínua repintava a janela transparente 60x/s
+  const blink = useBlink(mood === "calm" ? 5500 : 4200);
   const h = mood === "calm" ? 1.6 : mood === "attention" ? 3.8 : 3.3;
   const w = mood === "attention" ? 3.1 : 2.8;
   return (
@@ -58,8 +71,7 @@ function EyePair({ mood, s }: { mood: TofuMood; s: number }) {
       transition={mood === "working" || mood === "listening" ? { duration: 1.8, repeat: Infinity, ease: "easeInOut" } : SPRING}>
       {[0, 1].map((i) => (
         <motion.span key={i} className="block rounded-full" style={{ width: w * s, height: h * s, background: "#111" }}
-          animate={{ scaleY: [1, 1, 0.12, 1] }}
-          transition={{ duration: mood === "calm" ? 5.5 : 4.2, times: [0, 0.92, 0.95, 1], repeat: Infinity, delay: i * 0.03, ease: "easeInOut" }} />
+          animate={{ scaleY: blink ? 0.12 : 1 }} transition={{ duration: 0.07, delay: i * 0.02 }} />
       ))}
     </motion.div>
   );
@@ -89,13 +101,10 @@ function Badge({ mood, s }: { mood: TofuMood; s: number }) {
 }
 
 const MOTION: Partial<Record<TofuMood, any>> = {
-  idle: { animate: { y: [0, -0.6, 0] }, transition: { duration: 3.2, repeat: Infinity, ease: "easeInOut" } },
   working: { animate: { rotate: [-6, 6, -6] }, transition: { duration: 2.2, repeat: Infinity, ease: "easeInOut" } },
   done: { animate: { y: [0, -3, 0], scaleY: [1, 0.94, 1] }, transition: { duration: 0.6, repeat: 2, ease: "easeOut" } },
-  music: { animate: { rotate: [-4, 4, -4], y: [0, -1, 0] }, transition: { duration: 1.2, repeat: Infinity, ease: "easeInOut" } },
   attention: { animate: { x: [0, -1.2, 1.2, -1.2, 0] }, transition: { duration: 0.5, repeat: Infinity, repeatDelay: 1.6 } },
   error: { animate: { rotate: [-3, 3, -3] }, transition: { duration: 0.8, repeat: Infinity } },
-  sleep: { animate: { scale: [1, 1.03, 1] }, transition: { duration: 4, repeat: Infinity, ease: "easeInOut" } },
   listening: { animate: { scale: [1, 1.05, 1] }, transition: { duration: 1.1, repeat: Infinity, ease: "easeInOut" } },
 };
 

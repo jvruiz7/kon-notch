@@ -23,7 +23,7 @@ import { playSound, SOUND_PACKS } from "./sounds.js";
 import { bridge } from "./bridge.js";
 import { convertUnits } from "./units.js";
 import { parseReminder, describeWhen } from "./reminders.js";
-import { getRates, RATES_TTL, getIpLocation, getWeather, getLyrics, getCoverArt } from "./services.js";
+import { getRates, RATES_TTL, getIpLocation, fixByTimezone, getWeather, getLyrics, getCoverArt } from "./services.js";
 
 const TASK_DAYS = [0, 1, -2, 3, 6];
 const WIN_W = 820;
@@ -595,7 +595,7 @@ export default function KonIsland() {
     const t = setInterval(load, 5 * 60e3);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => { getIpLocation().then((r) => r?.value && setIpLoc(r.value)); }, []);
+  useEffect(() => { getIpLocation().then((r) => r?.value && setIpLoc(fixByTimezone(r.value))); }, []);
   useEffect(() => {
     let alive = true;
     const load = () => getWeather(loc, (rec) => alive && setWeather(rec.value)).then((rec) => alive && rec && setWeather(rec.value));

@@ -34,12 +34,38 @@ export function getRates(onUpdate) {
 
 /* ───────── Localização atual (por IP, sem permissão) — https://www.geojs.io ───────── */
 export function getIpLocation() {
-  return swr("iploc", 6 * 3600e3, async () => {
+  return swr("iploc2", 6 * 3600e3, async () => {
     const d = await (await fetch("https://get.geojs.io/v1/ip/geo.json")).json();
     const lat = parseFloat(d.latitude), lon = parseFloat(d.longitude);
     if (!Number.isFinite(lat)) throw new Error("geo");
-    return { city: d.city || d.region || "Localização atual", region: d.region, country: d.country_code, lat, lon, tz: d.timezone };
+    const r = { city: d.city || d.region || "Localização atual", region: d.region, country: d.country_code, lat, lon, tz: d.timezone };
+    return fixByTimezone(r);
   });
+}
+
+/* A localização por IP às vezes aponta a cidade do provedor (ex.: Porto Velho para quem está em Manaus).
+   Se o fuso do Windows não bate com o da cidade do IP, usa a capital do fuso do Windows. */
+const TZ_CAPITAL = {
+  "America/Boa_Vista": { city: "Boa Vista", lat: 2.8235, lon: -60.6758 },
+  "America/Manaus": { city: "Manaus", lat: -3.119, lon: -60.0217 },
+  "America/Porto_Velho": { city: "Porto Velho", lat: -8.7612, lon: -63.9004 },
+  "America/Rio_Branco": { city: "Rio Branco", lat: -9.9747, lon: -67.8243 },
+  "America/Eirunepe": { city: "Eirunepé", lat: -6.6603, lon: -69.8736 },
+  "America/Cuiaba": { city: "Cuiabá", lat: -15.601, lon: -56.0974 },
+  "America/Campo_Grande": { city: "Campo Grande", lat: -20.4697, lon: -54.6201 },
+  "America/Belem": { city: "Belém", lat: -1.4558, lon: -48.4902 },
+  "America/Santarem": { city: "Santarém", lat: -2.4385, lon: -54.6996 },
+  "America/Araguaina": { city: "Palmas", lat: -10.1844, lon: -48.3336 },
+  "America/Fortaleza": { city: "Fortaleza", lat: -3.7319, lon: -38.5267 },
+  "America/Recife": { city: "Recife", lat: -8.0476, lon: -34.877 },
+  "America/Maceio": { city: "Maceió", lat: -9.6498, lon: -35.7089 },
+  "America/Bahia": { city: "Salvador", lat: -12.9777, lon: -38.5016 },
+  "America/Noronha": { city: "Fernando de Noronha", lat: -3.8547, lon: -32.4247 },
+};
+export function fixByTimezone(r) {
+  let sys = ""; try { sys = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch {}
+  if (!r || r.country !== "BR" || !sys || sys === r.tz || !TZ_CAPITAL[sys]) return r;
+  return { ...r, ...TZ_CAPITAL[sys], region: "", tz: sys, byTz: true };
 }
 
 /* ───────── Clima — https://open-meteo.com (atual + próximas horas + nascer/pôr do sol) ───────── */

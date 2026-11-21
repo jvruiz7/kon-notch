@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { motion, Reorder, useDragControls } from "framer-motion";
 import { GripHorizontal } from "lucide-react";
 import { SPRING, PAGE_META } from "./data.js";
@@ -45,15 +45,23 @@ export function AlbumArt({ id, className = "" }) {
   );
 }
 
+// Relógio de quadros baixo (12 por segundo) para as barras de música: a janela do Kon é transparente e
+// cada quadro custa caro no Windows; animação contínua a 60 fps gastava ~10% de CPU com música tocando.
+function useStep(active, fps = 12) {
+  const [n, setN] = useState(0);
+  useEffect(() => { if (!active) return; const id = setInterval(() => setN((x) => x + 1), 1000 / fps); return () => clearInterval(id); }, [active, fps]);
+  return n;
+}
+const BAR = (seq, n, i) => { const k = (n + i * 2) % (seq.length * 3); const a = seq[Math.floor(k / 3) % seq.length], b = seq[(Math.floor(k / 3) + 1) % seq.length]; return a + ((b - a) * (k % 3)) / 3; };
+
 export function Equalizer({ playing }) {
   const colors = ["#ff5fa2", "#ffd166", "#ff7ab8", "#ffe08a", "#ff4f93"];
   const seqs = [[4, 14, 7, 12, 4], [10, 5, 14, 6, 10], [6, 12, 4, 14, 6], [12, 6, 10, 4, 12], [5, 10, 14, 7, 5]];
+  const n = useStep(playing);
   return (
     <div className="flex items-center gap-[2.5px] h-[16px]">
       {colors.map((c, i) => (
-        <motion.span key={i} className="w-[3px] rounded-full" style={{ background: c, boxShadow: `0 0 4px ${c}88` }}
-          animate={{ height: playing ? seqs[i] : 3 }}
-          transition={playing ? { duration: 0.9 + i * 0.07, repeat: Infinity, ease: "easeInOut" } : { duration: 0.3 }} />
+        <span key={i} className="w-[3px] rounded-full" style={{ background: c, boxShadow: `0 0 4px ${c}88`, height: playing ? BAR(seqs[i], n, i) : 3 }} />
       ))}
     </div>
   );
@@ -63,12 +71,11 @@ export function Equalizer({ playing }) {
 export function Waveform({ playing, color }) {
   const c = color || "#ff7ab8";
   const seqs = [[3, 9, 5, 12, 3], [6, 14, 8, 5, 6], [10, 5, 15, 7, 10], [5, 12, 6, 14, 5], [12, 7, 10, 4, 12], [4, 10, 13, 6, 4], [7, 4, 9, 12, 7]];
+  const n = useStep(playing);
   return (
     <div className="flex items-center gap-[2px] h-[18px]">
       {seqs.map((seq, i) => (
-        <motion.span key={i} className="w-[2.5px] rounded-full" style={{ background: c, boxShadow: `0 0 5px ${c}` }}
-          animate={{ height: playing ? seq : 3, opacity: playing ? 1 : 0.5 }}
-          transition={playing ? { duration: 0.8 + i * 0.09, repeat: Infinity, ease: "easeInOut" } : { duration: 0.3 }} />
+        <span key={i} className="w-[2.5px] rounded-full" style={{ background: c, boxShadow: `0 0 5px ${c}`, height: playing ? BAR(seq, n, i) : 3, opacity: playing ? 1 : 0.5 }} />
       ))}
     </div>
   );
