@@ -7,6 +7,7 @@ mod tasks;
 mod weather;
 mod platform;
 mod settings;
+mod system;
 mod ui;
 
 use eframe::egui;

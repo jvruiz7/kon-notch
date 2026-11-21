@@ -7,6 +7,8 @@ const _ICONS: () = ();
 use crate::icons as ic;
 use crate::tasks::Tasks;
 use crate::weather::{self, Weather};
+use crate::system::{self, SysInfo};
+use std::sync::atomic::{AtomicBool, Ordering};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -25,13 +27,13 @@ const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AG
 enum View { Compact, Panel }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Page { Home, Music, Weather, Focus, Todo, Settings }
+enum Page { Home, Music, Weather, Focus, Todo, System, Settings }
 
 impl Page {
-    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Settings => "settings" } }
-    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, _ => Page::Home } }
-    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Settings => "AJUSTES" } }
-    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Settings => ic::SETTINGS } }
+    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::System => "system", Page::Settings => "settings" } }
+    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "system" => Page::System, _ => Page::Home } }
+    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
+    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
     /// cor do ícone "ligado" (mesmas do Kon atual)
     fn color(self) -> Color32 { match self { Page::Music => Color32::from_rgb(244, 114, 182), Page::Weather => Color32::from_rgb(56, 189, 248), Page::Focus => Color32::from_rgb(255, 107, 91), Page::Todo => Color32::from_rgb(163, 230, 53), _ => Color32::from_rgb(251, 146, 60) } }
 }
@@ -73,6 +75,9 @@ pub struct KonApp {
     focus: Focus,
     weather: Arc<Mutex<Option<Weather>>>,
     tasks: Tasks,
+    sys: Arc<Mutex<SysInfo>>,
+    sys_on: Arc<AtomicBool>,
+    art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
     focusable: bool,
@@ -89,6 +94,9 @@ impl KonApp {
         let media = Media::start(move || ctx.request_repaint());
         let ctx2 = cc.egui_ctx.clone();
         let weather = weather::start(move || ctx2.request_repaint());
+        let sys_on = Arc::new(AtomicBool::new(false));
+        let ctx3 = cc.egui_ctx.clone();
+        let sys = system::start(sys_on.clone(), move || ctx3.request_repaint());
         let hit = Arc::new(Mutex::new(Hit { ppp: 1.0, ..Default::default() }));
         spawn_cursor_watch(cc.egui_ctx.clone(), hit.clone());
         let mins = settings.focus_minutes.clamp(1, 180);
@@ -104,7 +112,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -156,6 +164,8 @@ impl eframe::App for KonApp {
 
         let m = self.media.snapshot();
         self.focus_tick();
+        self.sys_on.store(self.view == View::Panel && self.page == Page::System, Ordering::Relaxed);
+        self.update_art(ctx, &m);
 
         // ── cursor: dentro ou fora do notch? ──
         let island = self.island_rect();
@@ -233,13 +243,14 @@ impl KonApp {
     }
 
     fn draw_compact(&mut self, ui: &mut egui::Ui, r: Rect, m: &MediaState, blink: bool, alpha: f32) {
-        let p = ui.painter();
+        let p = ui.painter().clone();
+        let p = &p;
         draw_tofu(p, r.center(), 0.85, blink, alpha);
         if m.active && m.playing && r.width() > COMPACT.x + 20.0 {
             // capa (cor) à esquerda e barras à direita
             let art = Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(20.0, 20.0));
-            p.rect_filled(art, CornerRadius::same(5), fade(Color32::from_rgb(214, 58, 134), alpha));
-            p.text(art.center(), Align2::CENTER_CENTER, "♫", FontId::proportional(11.0), fade(Color32::WHITE, alpha));
+            if let Some((_, t)) = &self.art { egui::Image::from_texture(t).corner_radius(5).tint(fade(Color32::WHITE, alpha)).paint_at(ui, art); }
+            else { gradient_rr(ui.painter(), art, 5.0, Color32::from_rgb(214, 58, 134), Color32::from_rgb(76, 29, 149), alpha); }
             draw_bars(p, pos2(r.right() - 40.0, r.center().y), alpha);
         }
     }
@@ -272,6 +283,7 @@ impl KonApp {
             Page::Music => self.page_music(ui, body, m, alpha),
             Page::Focus => self.page_focus(ui, body, alpha),
             Page::Todo => self.page_todo(ui, body, alpha),
+            Page::System => self.page_system(ui, body, alpha),
             Page::Weather => {}
             Page::Settings => self.page_settings(ui, body, alpha),
         }
@@ -280,7 +292,7 @@ impl KonApp {
 
     fn nav(&mut self, ui: &mut egui::Ui, bar: Rect, alpha: f32) {
         // mesma barra do Kon atual: "+" à esquerda, páginas no meio (a ativa vira pílula com nome), engrenagem à direita
-        let pages = [Page::Home, Page::Music, Page::Weather, Page::Focus, Page::Todo];
+        let pages = [Page::Home, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::System];
         let widths: Vec<f32> = pages.iter().map(|p| if *p == self.page { 30.0 + text_w(ui, p.label(), 10.5) } else { 28.0 }).collect();
         let total: f32 = widths.iter().sum::<f32>() + 2.0 * (pages.len() as f32 - 1.0);
         let mut x = bar.center().x - total / 2.0;
@@ -315,6 +327,72 @@ impl KonApp {
         if resp.hovered() || self.page == Page::Settings { p.circle_filled(g.center(), 14.0, fade(Color32::from_white_alpha(20), alpha)); }
         p.text(g.center(), Align2::CENTER_CENTER, ic::SETTINGS, icon_font(13.0), fade(Color32::from_white_alpha(if resp.hovered() { 204 } else { 102 }), alpha));
         if resp.clicked() { self.page = if self.page == Page::Settings { Page::from(&self.settings.page) } else { Page::Settings }; }
+    }
+
+    /// Capa do álbum: decodifica uma vez por faixa e guarda como textura da placa de vídeo.
+    fn update_art(&mut self, ctx: &egui::Context, m: &MediaState) {
+        let Some(bytes) = &m.art else { self.art = None; return };
+        if self.art.as_ref().map_or(false, |(k, _)| *k == m.art_key) { return; }
+        if let Ok(img) = image::load_from_memory(bytes) {
+            let img = img.thumbnail(256, 256).to_rgba8();
+            let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+            self.art = Some((m.art_key.clone(), ctx.load_texture("capa", ci, egui::TextureOptions::LINEAR)));
+        }
+    }
+
+    fn cover(&self, ui: &mut egui::Ui, r: Rect, radius: u8, alpha: f32, big_icon: f32) {
+        if let Some((_, t)) = &self.art {
+            egui::Image::from_texture(t).corner_radius(radius).tint(fade(Color32::WHITE, alpha)).paint_at(ui, r);
+        } else {
+            // sem capa: mesmo degradê rosa/roxo do Kon atual com a nota
+            gradient_rr(ui.painter(), r, radius as f32, Color32::from_rgb(214, 58, 134), Color32::from_rgb(76, 29, 149), alpha);
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, ic::MUSIC_2, icon_font(big_icon), fade(Color32::from_white_alpha(170), alpha));
+        }
+    }
+
+    fn page_system(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let s = self.sys.lock().unwrap().clone();
+        let p = ui.painter().clone();
+        let gap = 10.0;
+        let w1 = body.width() * 0.24; let w2 = body.width() * 0.24;
+        let c1 = Rect::from_min_size(body.min, vec2(w1, body.height()));
+        let col2 = Rect::from_min_size(pos2(c1.right() + gap, body.top()), vec2(w2, body.height()));
+        let m1 = Rect::from_min_size(col2.min, vec2(w2, (body.height() - gap) / 2.0));
+        let m2 = Rect::from_min_max(pos2(col2.left(), m1.bottom() + gap), col2.max);
+        let c3 = Rect::from_min_max(pos2(col2.right() + gap, body.top()), body.max);
+        for r in [c1, m1, m2, c3] { card(&p, r, Color32::from_white_alpha(8), alpha); }
+        // CPU
+        let rc = pos2(c1.center().x, c1.center().y - 12.0);
+        let green = Color32::from_rgb(52, 211, 153);
+        p.circle_stroke(rc, 30.0, Stroke::new(6.0_f32, fade(Color32::from_white_alpha(25), alpha)));
+        arc(&p, rc, 30.0, (s.cpu / 100.0).clamp(0.0, 1.0), Stroke::new(6.0_f32, fade(green, alpha)));
+        p.text(rc, Align2::CENTER_CENTER, format!("{:.0}%", s.cpu), bold(17.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(c1.center().x, c1.bottom() - 26.0), Align2::CENTER_CENTER, format!("CPU · {} núcleos", s.cores), FontId::proportional(11.0), fade(Color32::from_white_alpha(115), alpha));
+        // memória e disco
+        let gb = |b: u64| b as f64 / 1_073_741_824.0;
+        let bar = |r: Rect, title: &str, frac: f32, sub: String, col: Color32| {
+            p.text(pos2(r.left() + 12.0, r.top() + 16.0), Align2::LEFT_CENTER, title, FontId::proportional(11.0), fade(Color32::from_white_alpha(150), alpha));
+            p.text(pos2(r.right() - 12.0, r.top() + 16.0), Align2::RIGHT_CENTER, format!("{:.0}%", frac * 100.0), bold(11.0), fade(Color32::WHITE, alpha));
+            let t = Rect::from_min_size(pos2(r.left() + 12.0, r.top() + 30.0), vec2(r.width() - 24.0, 4.0));
+            p.rect_filled(t, CornerRadius::same(2), fade(Color32::from_white_alpha(30), alpha));
+            p.rect_filled(Rect::from_min_size(t.min, vec2(t.width() * frac.clamp(0.0, 1.0), 4.0)), CornerRadius::same(2), fade(col, alpha));
+            p.text(pos2(r.left() + 12.0, r.top() + 48.0), Align2::LEFT_CENTER, sub, FontId::proportional(11.0), fade(Color32::from_white_alpha(115), alpha));
+        };
+        let mf = if s.mem_total > 0 { s.mem_used as f32 / s.mem_total as f32 } else { 0.0 };
+        bar(m1, "Memória", mf, format!("{:.1} de {:.1} GB", gb(s.mem_used), gb(s.mem_total)), green);
+        let df = if s.disk_total > 0 { 1.0 - s.disk_free as f32 / s.disk_total as f32 } else { 0.0 };
+        bar(m2, "Disco C:", df, format!("{:.1} GB livres", gb(s.disk_free)), Color32::from_rgb(251, 191, 36));
+        // mais pesados
+        p.text(pos2(c3.left() + 14.0, c3.top() + 18.0), Align2::LEFT_CENTER, "MAIS PESADOS AGORA", bold(10.0), fade(Color32::from_white_alpha(115), alpha));
+        p.text(pos2(c3.right() - 14.0, c3.top() + 18.0), Align2::RIGHT_CENTER, format!("ligado há {}h", s.uptime_h), FontId::proportional(10.5), fade(Color32::from_white_alpha(100), alpha));
+        for (i, pr) in s.top.iter().enumerate() {
+            let y = c3.top() + 44.0 + i as f32 * 22.0;
+            p.text(pos2(c3.left() + 14.0, y), Align2::LEFT_CENTER, ellipsize(&pr.name, 22), FontId::proportional(12.0), fade(Color32::WHITE, alpha));
+            let mem = if pr.mem_mb >= 1024 { format!("{:.1} GB", pr.mem_mb as f64 / 1024.0) } else { format!("{} MB", pr.mem_mb) };
+            p.text(pos2(c3.right() - 70.0, y), Align2::RIGHT_CENTER, mem, FontId::proportional(11.5), fade(Color32::from_white_alpha(140), alpha));
+            p.text(pos2(c3.right() - 14.0, y), Align2::RIGHT_CENTER, format!("{:.1}%", pr.cpu), FontId::proportional(11.5), fade(Color32::from_white_alpha(140), alpha));
+        }
+        if s.top.is_empty() { p.text(c3.center(), Align2::CENTER_CENTER, "Medindo…", FontId::proportional(12.0), fade(Color32::from_white_alpha(100), alpha)); }
     }
 
     fn page_weather(&mut self, ui: &mut egui::Ui, body: Rect, w: Option<&Weather>, alpha: f32) {
@@ -470,20 +548,24 @@ impl KonApp {
         let c2 = Rect::from_min_size(pos2(c1.right() + gap, body.top()), vec2(w2, body.height()));
         let c3 = Rect::from_min_max(pos2(c2.right() + gap, body.top()), body.max);
         let p = ui.painter().clone();
-        // cartão de música
-        card(&p, c2, Color32::from_rgb(58, 28, 110), alpha);
+        // cartão de música: capa inteira com escurecido embaixo, como no Kon atual
+        self.cover(ui, c2, 16, alpha, 40.0);
+        gradient_v(&p, Rect::from_min_max(pos2(c2.left(), c2.center().y - 10.0), c2.max), 16.0, Color32::from_rgba_unmultiplied(0, 0, 0, 0), Color32::from_rgba_unmultiplied(0, 0, 0, 215), alpha);
+        p.rect_stroke(c2, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(18), alpha)), egui::StrokeKind::Inside);
         p.text(pos2(c2.left() + 14.0, c2.bottom() - 34.0), Align2::LEFT_BOTTOM, ellipsize(if m.active { &m.title } else { "Nada tocando" }, 26), bold(16.0), fade(Color32::WHITE, alpha));
         p.text(pos2(c2.left() + 14.0, c2.bottom() - 14.0), Align2::LEFT_BOTTOM, ellipsize(if m.active { &m.artist } else { "Toque música em qualquer app" }, 34), FontId::proportional(12.0), fade(DIM, alpha));
         if round_button(ui, &p, pos2(c2.right() - 30.0, c2.bottom() - 30.0), 17.0, if m.playing { "\u{e12e}" } else { "\u{e13c}" }, alpha, true).clicked() { self.media.send(MediaCmd::Toggle); }
         // foco
-        card(&p, c3, Color32::from_rgb(40, 18, 60), alpha);
+        gradient_rr(&p, c3, 16.0, Color32::from_rgb(46, 16, 74), Color32::from_rgb(10, 10, 10), alpha);
+        p.rect_stroke(c3, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(18), alpha)), egui::StrokeKind::Inside);
         p.text(pos2(c3.left() + 14.0, c3.top() + 16.0), Align2::LEFT_CENTER, "FOCO", bold(10.0), fade(Color32::from_rgb(216, 180, 254), alpha));
         p.text(pos2(c3.left() + 14.0, c3.bottom() - 34.0), Align2::LEFT_BOTTOM, mmss(self.focus.left), FontId::monospace(24.0), fade(Color32::WHITE, alpha));
         let st = if self.focus.running_until.is_some() { "Rodando" } else if self.focus.finished_at.is_some() { "Concluído!" } else if self.focus.left < self.focus.total as f32 { "Pausado" } else { "Pronto" };
         p.text(pos2(c3.left() + 14.0, c3.bottom() - 14.0), Align2::LEFT_BOTTOM, st, FontId::proportional(12.0), fade(DIM, alpha));
         if round_button(ui, &p, pos2(c3.right() - 24.0, c3.bottom() - 24.0), 13.0, if self.focus.running_until.is_some() { "\u{e12e}" } else { "\u{e13c}" }, alpha, false).clicked() { self.focus_toggle(); }
         // Claude Code (chega na próxima fase)
-        card(&p, c1, Color32::from_rgb(45, 28, 8), alpha);
+        gradient_rr(&p, c1, 16.0, Color32::from_rgb(69, 26, 3), Color32::from_rgb(10, 10, 10), alpha);
+        p.rect_stroke(c1, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(18), alpha)), egui::StrokeKind::Inside);
         p.text(pos2(c1.left() + 14.0, c1.top() + 16.0), Align2::LEFT_CENTER, "CLAUDE", bold(10.0), fade(Color32::from_rgb(253, 230, 138), alpha));
         p.text(pos2(c1.left() + 14.0, c1.bottom() - 34.0), Align2::LEFT_BOTTOM, "0:00", FontId::monospace(24.0), fade(Color32::WHITE, alpha));
         p.text(pos2(c1.left() + 14.0, c1.bottom() - 14.0), Align2::LEFT_BOTTOM, "Parado", FontId::proportional(12.0), fade(DIM, alpha));
@@ -492,8 +574,7 @@ impl KonApp {
     fn page_music(&mut self, ui: &mut egui::Ui, body: Rect, m: &MediaState, alpha: f32) {
         let p = ui.painter().clone();
         let art = Rect::from_min_size(pos2(body.left() + 6.0, body.center().y - 62.0), vec2(124.0, 124.0));
-        p.rect_filled(art, CornerRadius::same(18), fade(Color32::from_rgb(120, 40, 140), alpha));
-        p.text(art.center(), Align2::CENTER_CENTER, "♫", FontId::proportional(44.0), fade(Color32::from_white_alpha(170), alpha));
+        self.cover(ui, art, 18, alpha, 44.0);
         let x = art.right() + 22.0; let right = body.right() - 8.0;
         p.text(pos2(x, art.top() + 10.0), Align2::LEFT_TOP, ellipsize(if m.active { &m.title } else { "Nada tocando" }, 36), bold(19.0), fade(Color32::WHITE, alpha));
         p.text(pos2(x, art.top() + 36.0), Align2::LEFT_TOP, ellipsize(if m.active { &m.artist } else { "Toque música em qualquer app" }, 44), FontId::proportional(12.5), fade(DIM, alpha));
@@ -570,6 +651,34 @@ fn arc(p: &egui::Painter, c: Pos2, r: f32, frac: f32, st: Stroke) {
     let n = (48.0 * frac).ceil().max(2.0) as usize;
     let pts: Vec<Pos2> = (0..=n).map(|i| { let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * i as f32 / n as f32; pos2(c.x + r * a.cos(), c.y + r * a.sin()) }).collect();
     p.add(egui::Shape::line(pts, st));
+}
+/// Retângulo arredondado com degradê diagonal (canto de cima à esquerda → canto de baixo à direita).
+fn gradient_rr(p: &egui::Painter, r: Rect, rad: f32, a: Color32, b: Color32, alpha: f32) {
+    rr_mesh(p, r, rad, |pt| { let t = (((pt.x - r.left()) / r.width()) * 0.45 + ((pt.y - r.top()) / r.height()) * 0.55).clamp(0.0, 1.0); fade(lerp_c(a, b, t), alpha) });
+}
+/// Degradê vertical (de cima para baixo), com cantos de baixo arredondados.
+fn gradient_v(p: &egui::Painter, r: Rect, rad: f32, top: Color32, bottom: Color32, alpha: f32) {
+    rr_mesh(p, r, rad, |pt| fade(lerp_c(top, bottom, ((pt.y - r.top()) / r.height()).clamp(0.0, 1.0)), alpha));
+}
+fn lerp_c(a: Color32, b: Color32, t: f32) -> Color32 {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgba_premultiplied(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()), l(a.a(), b.a()))
+}
+/// Polígono convexo do retângulo arredondado, em leque a partir do centro, com cor por vértice.
+fn rr_mesh(p: &egui::Painter, r: Rect, rad: f32, color: impl Fn(Pos2) -> Color32) {
+    let rad = rad.min(r.width() / 2.0).min(r.height() / 2.0);
+    let mut pts = vec![];
+    let corners = [(r.right() - rad, r.bottom() - rad, 0.0f32), (r.left() + rad, r.bottom() - rad, 90.0), (r.left() + rad, r.top() + rad, 180.0), (r.right() - rad, r.top() + rad, 270.0)];
+    for (cx, cy, start) in corners {
+        for i in 0..=8 { let a = (start + i as f32 * 90.0 / 8.0).to_radians(); pts.push(pos2(cx + rad * a.cos(), cy + rad * a.sin())); }
+    }
+    let mut mesh = egui::Mesh::default();
+    let c = r.center();
+    mesh.colored_vertex(c, color(c));
+    for pt in &pts { mesh.colored_vertex(*pt, color(*pt)); }
+    let n = pts.len() as u32;
+    for i in 0..n { mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n); }
+    p.add(egui::Shape::mesh(mesh));
 }
 fn fade(c: Color32, a: f32) -> Color32 { c.gamma_multiply(a.clamp(0.0, 1.0)) }
 fn bold(size: f32) -> FontId { FontId::new(size, FontFamily::Name("bold".into())) }
