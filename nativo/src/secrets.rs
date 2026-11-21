@@ -72,5 +72,6 @@ pub fn valid(provider: &str, k: &str) -> bool {
 #[cfg(test)]
 mod t {
     #[test] fn b64() { for s in ["", "a", "ab", "abc", "chave-ç"] { assert_eq!(super::unb64(&super::b64(s.as_bytes())).unwrap(), s.as_bytes()); } }
+    #[test] fn ida_e_volta() { let k = "AIzaTESTE-nao-e-chave-de-verdade-1234567"; let e = super::protect(k); assert!(!e.is_empty() && !e.contains(k)); assert_eq!(super::unprotect(&e), k); }
     #[test] fn fmt() { assert!(super::valid("gemini", &format!("AIza{}", "x".repeat(35)))); assert!(super::valid("anthropic", "sk-ant-api03-abcdefghijklmnopqrst")); assert!(!super::valid("gemini", "oi")); }
 }

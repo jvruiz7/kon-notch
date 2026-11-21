@@ -33,7 +33,7 @@ const DIM: Color32 = Color32::from_rgba_premultiplied(140, 140, 148, 255);
 const DAYS: [&str; 7] = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum View { Compact, Panel, Perm, Sheet, Ask, Translate, TextAct }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,6 +123,7 @@ pub struct KonApp {
     key_in: [String; 2],
     model_in: [String; 2],
     copied_at: Option<Instant>,
+    dbg_last: String,
     tr: Arc<Mutex<Tr>>,
     ta: Arc<Mutex<TextAct>>,
     art: Option<(String, egui::TextureHandle)>,
@@ -164,7 +165,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -190,6 +191,7 @@ impl KonApp {
 
     fn set_page(&mut self, p: Page) {
         self.page = p;
+        if std::env::var("KON_DEBUG").is_ok() { eprintln!("page={}", p.id()); }
         if p != Page::Settings { self.settings.page = p.id().into(); self.settings.save(); }
     }
 
@@ -304,6 +306,7 @@ impl eframe::App for KonApp {
         if self.ctoast.as_ref().map_or(false, |c| c.1.elapsed() >= Duration::from_millis(5300)) { self.ctoast = None; }
 
         // ── animação do tamanho ──
+        if std::env::var("KON_DEBUG").is_ok() { let v = format!("{:?}/{}", self.view, self.page.id()); if v != self.dbg_last { eprintln!("view={v}"); self.dbg_last = v; } }
         let target = self.target_size(&m);
         let a = self.w.step(target.x, dt, 22.0);
         let b = self.h.step(target.y, dt, 22.0);
