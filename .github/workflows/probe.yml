@@ -1,0 +1,49 @@
+name: Sonda de interface (Windows)
+on:
+  push:
+    branches: ["probe/**"]
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scale: ["1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npx vite build
+      - name: Ajustes de teste
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:APPDATA 'Kon'; New-Item -ItemType Directory -Force $d | Out-Null
+          '{"onboarded":true,"hideInCapture":false,"autoUpdate":false,"devDock":false,"soundsOn":false,"approvals":false,"clipboardOn":false,"geminiKey":"AQ.teste-legado-nao-deve-vazar-1234567890abcdef"}' | Set-Content (Join-Path $d 'settings.json')
+      - name: Abre o Kon e dirige a interface com cliques reais
+        shell: pwsh
+        run: |
+          npm i --no-save playwright-core@1 | Out-Null
+          node node_modules/electron/install.js
+          $exe = node -p "require('electron')"
+          Write-Host "electron: $exe"
+          $p = Start-Process $exe -ArgumentList '.','--remote-debugging-port=9222',"--force-device-scale-factor=${{ matrix.scale }}" -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\e-out.txt" -RedirectStandardError "$env:RUNNER_TEMP\e-err.txt"
+          Start-Sleep 20
+          Write-Host "electron vivo: $(-not $p.HasExited)"; Get-Content "$env:RUNNER_TEMP\e-out.txt","$env:RUNNER_TEMP\e-err.txt" -ErrorAction SilentlyContinue | Select-Object -First 40
+          node .github/probe/drive.js "$env:RUNNER_TEMP\probe"
+          $d = Join-Path $env:APPDATA 'Kon'
+          foreach ($f in 'kon-error.log','kon-helper.log') { $x = Join-Path $d $f; if (Test-Path $x) { Write-Host "--- $f"; Get-Content $x -Tail 40 } }
+          Write-Host "--- settings.json (não pode ter geminiKey)"; Get-Content (Join-Path $d 'settings.json')
+          Copy-Item (Join-Path $d 'settings.json') "$env:RUNNER_TEMP\probe\settings-depois.json"
+      - name: Publica os prints num branch
+        if: always()
+        shell: pwsh
+        run: |
+          $o = "$env:RUNNER_TEMP\probe"
+          Set-Location $o
+          git init -q -b "probe-out-${{ matrix.scale }}"
+          git config user.name "kon-probe"; git config user.email "probe@users.noreply.github.com"
+          git add -A; git commit -qm "probe ${{ github.sha }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "probe-out-${{ matrix.scale }}"
