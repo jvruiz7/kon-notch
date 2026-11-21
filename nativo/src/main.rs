@@ -32,11 +32,13 @@ fn main() -> eframe::Result<()> {
         renderer,
         ..Default::default()
     };
-    // OpenGL é o mais leve; em PCs sem OpenGL (máquinas virtuais, área de trabalho remota) usa DirectX 12 / WARP
-    let first = eframe::run_native("Kon", make(eframe::Renderer::Glow), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
-    if first.is_ok() { return first; }
-    let r = eframe::run_native("Kon", make(eframe::Renderer::Wgpu), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
-    let r = r.map_err(|e| { eprintln!("glow falhou: {first:?}"); e });
+    // erros fatais também vão para o log (o .exe não tem console)
+    std::panic::set_hook(Box::new(|info| {
+        let d = platform::data_dir();
+        let _ = std::fs::create_dir_all(&d);
+        let _ = std::fs::write(d.join("erro.log"), format!("pane: {info}\n"));
+    }));
+    let r = eframe::run_native("Kon", make(eframe::Renderer::Glow), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
     if let Err(e) = &r {
         // sem console no Windows: o erro vai para %APPDATA%\KonNativo\erro.log
         let d = platform::data_dir();
