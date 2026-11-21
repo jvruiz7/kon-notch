@@ -6,6 +6,7 @@ mod clipboard;
 mod icons;
 mod media;
 mod tasks;
+mod usage;
 mod weather;
 mod platform;
 mod quick;

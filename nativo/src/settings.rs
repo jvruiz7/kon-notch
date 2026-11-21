@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub open_on_hover: bool,
+    pub open_mode: String,
+    pub approvals: bool,
     pub focus_minutes: u32,
     pub accent: [u8; 3],
     pub page: String,
@@ -13,11 +14,12 @@ pub struct Settings {
     pub water_day: String,
     pub water_count: u32,
     pub sys_alerts: bool,
+    pub claude_plan: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { open_on_hover: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true }
+        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into() }
     }
 }
 
