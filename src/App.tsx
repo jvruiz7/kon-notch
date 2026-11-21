@@ -155,7 +155,6 @@ export default function KonIsland() {
   const [askFile, setAskFile] = useState(null);    // arquivo anexado de propósito (zona "Perguntar à IA")
   const [dropZone, setDropZone] = useState("stash");
   const [reminders, setReminders] = useState([]);
-  const [mixOpen, setMixOpen] = useState(false);
   const [quick, setQuick] = usePersist("quick.v1", []);
   const [qForm, setQFormState] = useState(null);  // { kind, label, target } enquanto adiciona
   const setQForm = (v) => setQFormState((cur) => { const n = typeof v === "function" ? v(cur) : v; return n; });
@@ -552,15 +551,15 @@ export default function KonIsland() {
     setQuick((l) => [...l, { id: uid(), kind: qForm.kind, label, target: t }]);
     setQForm(null);
   };
-  /* Mixer (página Música): atualiza a cada 3 s enquanto aberto */
+  /* Mixer (página Som): atualiza a cada 3 s enquanto aberto */
   useEffect(() => {
-    if (view !== "panel" || !((mixOpen && tab === "music") || tab === "sound")) return;
+    if (view !== "panel" || tab !== "sound") return;
     let alive = true;
     const load = () => bridge.mixGet().then((m) => alive && m && setMix(m));
     load();
     const t = setInterval(load, 3000);
     return () => { alive = false; clearInterval(t); };
-  }, [mixOpen, view, tab]);
+  }, [view, tab]);
   const setAppVol = (app, v) => {
     setMix((m) => ({ ...m, apps: m.apps.map((a) => (a.name === app.name ? { ...a, volume: v } : a)) }));
     const now = Date.now(), last = mixSend.current[app.name] || 0;
@@ -1239,40 +1238,10 @@ export default function KonIsland() {
       <div className="pointer-events-none absolute -left-10 -top-10 w-56 h-56 rounded-full bg-pink-500/25 blur-3xl transition-colors duration-700" style={artColor ? { background: artColor, opacity: 0.35 } : undefined} />
       <div className="pointer-events-none absolute right-0 -bottom-16 w-64 h-48 rounded-full bg-indigo-600/25 blur-3xl" />
       <motion.div className="relative rounded-2xl overflow-hidden shrink-0 shadow-[0_12px_30px_rgba(214,58,134,0.35)]" initial={false}
-        animate={{ scale: playing ? 1 : 0.9, width: lyricsOn && !mixOpen ? 104 : 132, height: lyricsOn && !mixOpen ? 104 : 132 }} transition={SPRING}>
+        animate={{ scale: playing ? 1 : 0.9, width: lyricsOn ? 104 : 132, height: lyricsOn ? 104 : 132 }} transition={SPRING}>
         {cover("mus")}
       </motion.div>
-      <button onClick={() => setMixOpen((v) => !v)} title="Saída de áudio e volume por app"
-        className={`absolute top-0 right-0 z-10 h-6 px-2 rounded-full flex items-center gap-1 text-[10.5px] font-medium ${mixOpen ? "bg-white text-black" : "bg-white/[0.08] text-white/65 hover:bg-white/[0.14]"}`}>
-        <Volume2 size={11} /> {mixOpen ? "Voltar" : "Áudio"}
-      </button>
-      {mixOpen ? (
-        <div className="relative flex-1 min-w-0 h-full flex flex-col gap-1.5 pt-0.5 pr-0.5 overflow-hidden">
-          <div className="text-[10px] font-semibold tracking-[0.1em] text-white/40">SAÍDA</div>
-          <div className="flex flex-wrap gap-1 pr-16">
-            {(mix?.devices || []).map((d) => (
-              <button key={d.id} onClick={async () => { setMix((m) => ({ ...m, devices: m.devices.map((x) => ({ ...x, default: x.id === d.id })) })); const r = await bridge.mixSetDevice(d.id); if (r?.ok) setMix(r); }}
-                className={`h-[24px] max-w-[190px] px-2.5 rounded-full text-[11px] truncate ${d.default ? "bg-white text-black font-semibold" : "bg-white/[0.07] text-white/75 hover:bg-white/[0.12]"}`}>{d.name}</button>
-            ))}
-            {!mix && <span className="text-[11px] text-white/40">{REAL ? "Lendo os dispositivos…" : ""}</span>}
-            {mix && !mix.ok && <span className="text-[11px] text-amber-300/80">Não consegui ler o áudio do Windows</span>}
-          </div>
-          <div className="text-[10px] font-semibold tracking-[0.1em] text-white/40 mt-0.5">APPS</div>
-          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 [scrollbar-width:none]">
-            {(mix?.apps || []).map((a) => (
-              <div key={a.name} className="flex items-center gap-2 h-[24px]">
-                <button onClick={async () => { setMix((m) => ({ ...m, apps: m.apps.map((x) => (x.name === a.name ? { ...x, muted: !x.muted } : x)) })); bridge.mixAppMute(a.pids, !a.muted); }}
-                  className={`w-6 h-6 grid place-items-center rounded-full shrink-0 ${a.muted ? "text-red-300" : "text-white/60 hover:text-white"}`}>{a.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button>
-                <span className="w-[110px] text-[11.5px] truncate" title={a.title}>{a.title}</span>
-                <input type="range" min="0" max="100" value={a.volume} onChange={(e) => setAppVol(a, +e.target.value)} className="kon-range flex-1" />
-                <span className="w-7 text-right text-[10.5px] tabular-nums text-white/50">{a.volume}</span>
-              </div>
-            ))}
-            {mix?.ok && !mix.apps?.length && <span className="text-[11px] text-white/40">Nenhum app tocando som agora</span>}
-          </div>
-        </div>
-      ) : (
-      (() => {
+      {(() => {
         const progress = (
           <div>
             <div className="h-1 rounded-full bg-white/20 cursor-pointer" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPos(Math.round(((e.clientX - r.left) / r.width) * duration)); }}>
@@ -1307,7 +1276,7 @@ export default function KonIsland() {
           // só o player: título grande, progresso e controles completos
           return (
             <motion.div key="player" {...FADE} className="relative flex-1 min-w-0 flex flex-col justify-center pr-1">
-              <div className="text-[19px] font-semibold tracking-tight truncate pr-16 leading-tight">{trackTitle || "Nada tocando"}</div>
+              <div className="text-[19px] font-semibold tracking-tight truncate leading-tight">{trackTitle || "Nada tocando"}</div>
               <div className="text-[12.5px] text-white/55 truncate mt-0.5">{trackArtist || "\u00a0"}</div>
               <div className="mt-4">{progress}</div>
               <div className="mt-1.5">{controls(false)}</div>
@@ -1336,8 +1305,7 @@ export default function KonIsland() {
             </div>
           </motion.div>
         );
-      })()
-      )}
+      })()}
     </div>
   );
 
