@@ -4,6 +4,7 @@
 mod claude;
 mod clipboard;
 mod icons;
+mod inuse;
 mod media;
 mod tasks;
 mod usage;

@@ -19,11 +19,13 @@ pub struct Settings {
     pub dnd: bool,
     pub locked: bool,
     pub privacy: bool,
+    pub page_order: Vec<String>,
+    pub pages_off: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into(), display: "primary".into(), dnd: false, locked: false, privacy: false }
+        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into(), display: "primary".into(), dnd: false, locked: false, privacy: false, page_order: ["home","files","clip","music","weather","focus","todo","claude","quick","system","water"].iter().map(|s| s.to_string()).collect(), pages_off: vec![] }
     }
 }
 

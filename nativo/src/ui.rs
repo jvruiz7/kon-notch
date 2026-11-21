@@ -9,6 +9,7 @@ use crate::tasks::Tasks;
 use crate::weather::{self, Weather};
 use crate::system::{self, SysInfo};
 use crate::clipboard;
+use crate::inuse::{self, InUse};
 use crate::usage;
 use crate::quick::{self, Quick};
 use crate::claude::{self, Status as CStatus};
@@ -101,6 +102,9 @@ pub struct KonApp {
     usage_at: Option<Instant>,
     sheet_scroll: f32,
     sleep_until: Option<Instant>,
+    inuse: Arc<Mutex<InUse>>,
+    sheet_pages: bool,
+    drag_page: Option<(usize, f32)>,
     art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
@@ -140,7 +144,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -211,6 +215,9 @@ impl eframe::App for KonApp {
         if self.passthrough == inside {
             self.passthrough = !inside;
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(self.passthrough));
+        }
+        if !matches!(self.page, Page::Sleep | Page::Lock | Page::Settings) && self.settings.pages_off.iter().any(|x| x == self.page.id()) {
+            if let Some(f) = self.visible_pages().first() { self.page = *f; }
         }
         // pedido de permissão do Claude Code: a ilha vira o cartão de aprovação
         let has_perm = !self.claude.lock().unwrap().perms.is_empty();
@@ -369,7 +376,21 @@ impl KonApp {
         p.text(pos2(r.left() + 22.0, hy), Align2::LEFT_CENTER, &date, bold(11.0), fade(DIM, alpha));
         let temp = self.weather.lock().unwrap().as_ref().map_or("–°".to_string(), |w| format!("{}°", w.temp));
         p.text(pos2(r.left() + 22.0 + text_w(ui, &date, 11.0) + 6.0, hy), Align2::LEFT_CENTER, temp, bold(11.0), fade(Color32::WHITE, alpha));
-        p.text(pos2(r.right() - 22.0, hy), Align2::RIGHT_CENTER, format!("{:02}:{:02}", now.hour(), now.minute()), bold(12.0), fade(Color32::WHITE, alpha));
+        let clock = format!("{:02}:{:02}", now.hour(), now.minute());
+        p.text(pos2(r.right() - 22.0, hy), Align2::RIGHT_CENTER, &clock, bold(12.0), fade(Color32::WHITE, alpha));
+        // microfone e câmera em uso (laranja e verde, como no Kon atual)
+        let iu = self.inuse.lock().unwrap().clone();
+        let mut ix = r.right() - 22.0 - text_w(ui, &clock, 12.0) - 8.0;
+        for (names, icon, col, tip) in [(&iu.cam, ic::CAMERA, Color32::from_rgb(110, 231, 183), "Câmera em uso"), (&iu.mic, ic::MIC, Color32::from_rgb(253, 186, 116), "Microfone em uso")] {
+            if names.is_empty() { continue; }
+            let t = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+            let tw = text_w(ui, &t, 10.5);
+            p.text(pos2(ix, hy), Align2::RIGHT_CENTER, &t, FontId::proportional(10.5), fade(col, alpha));
+            p.text(pos2(ix - tw - 4.0, hy), Align2::RIGHT_CENTER, icon, icon_font(11.0), fade(col, alpha));
+            let rr = Rect::from_min_max(pos2(ix - tw - 18.0, hy - 8.0), pos2(ix, hy + 8.0));
+            ui.interact(rr, ui.id().with(tip), Sense::hover()).on_hover_text(tip);
+            ix -= tw + 26.0;
+        }
         draw_tofu(&p, pos2(r.center().x, hy), 0.95, blink, alpha);
 
         let body = Rect::from_min_max(pos2(r.left() + 16.0, r.top() + 42.0), pos2(r.right() - 16.0, r.bottom() - 50.0));
@@ -413,7 +434,7 @@ impl KonApp {
     fn nav(&mut self, ui: &mut egui::Ui, bar: Rect, alpha: f32) {
         // mesma barra do Kon atual: "+" à esquerda; no meio as páginas, um divisor, Descanso e Travar, e a engrenagem;
         // à direita a bolinha de status (verde com música, roxa com o Foco rodando)
-        let pages = [Page::Home, Page::Files, Page::Clip, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::Claude, Page::Quick, Page::System, Page::Water];
+        let pages = self.visible_pages();
         let util = [(Page::Sleep, self.settings.dnd || self.sleep_until.is_some(), Color32::from_rgb(165, 180, 252)), (Page::Lock, self.settings.locked || self.settings.privacy, Color32::from_rgb(252, 211, 77))];
         let wbtn = |ui: &egui::Ui, pg: Page, active: bool| if active { 29.0 + 6.0 + text_w(ui, pg.label(), 10.5) } else { 29.0 };
         let mut total: f32 = pages.iter().map(|p| wbtn(ui, *p, self.page == *p)).sum::<f32>() + 2.0 * pages.len() as f32;
@@ -433,7 +454,7 @@ impl KonApp {
             if resp.clicked() { me.adding = None; if matches!(pg, Page::Sleep | Page::Lock) { me.page = pg; } else { me.set_page(pg); } }
             *x += w + 2.0;
         };
-        for pg in pages { btn(ui, &mut x, pg, None, self); }
+        for pg in pages.iter().copied() { btn(ui, &mut x, pg, None, self); }
         ui.painter().line_segment([pos2(x + 3.5, bar.center().y - 8.0), pos2(x + 3.5, bar.center().y + 8.0)], Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)));
         x += 9.0;
         for (pg, on, c) in util { btn(ui, &mut x, pg, if on { Some(c) } else { None }, self); }
@@ -455,6 +476,17 @@ impl KonApp {
         let pulse = if playing || timer { 0.7 + 0.3 * (ui.input(|i| i.time) as f32 * 4.5).cos() } else { 1.0 };
         let dc = if playing { Color32::from_rgb(52, 211, 153) } else if timer { Color32::from_rgb(192, 132, 252) } else { Color32::from_white_alpha(64) };
         p.circle_filled(pos2(bar.right() - 6.0, bar.center().y), 3.0, fade(dc, alpha * pulse));
+    }
+
+    /// Páginas na ordem escolhida em Configurações → Pages (as novas entram no fim, ligadas).
+    fn page_ids(&self) -> Vec<String> {
+        let all = ["home", "files", "clip", "music", "weather", "focus", "todo", "claude", "quick", "system", "water"];
+        let mut v: Vec<String> = self.settings.page_order.iter().filter(|x| all.contains(&x.as_str())).cloned().collect();
+        for a in all { if !v.iter().any(|x| x == a) { v.push(a.into()); } }
+        v
+    }
+    fn visible_pages(&self) -> Vec<Page> {
+        self.page_ids().iter().filter(|id| !self.settings.pages_off.contains(id)).map(|id| Page::from(id)).collect()
     }
 
     fn page_sleep(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
@@ -789,14 +821,17 @@ impl KonApp {
     fn draw_sheet(&mut self, ui: &mut egui::Ui, r: Rect, alpha: f32) {
         let p = ui.painter().clone();
         let inner = Rect::from_min_max(pos2(r.left() + 16.0, r.top() + 12.0), pos2(r.right() - 16.0, r.bottom() - 16.0));
-        p.text(pos2(inner.left(), inner.top() + 10.0), Align2::LEFT_CENTER, "Configurações", bold(17.0), fade(Color32::WHITE, alpha));
-        p.text(pos2(inner.left(), inner.top() + 30.0), Align2::LEFT_CENTER, "Notch, Claude Code e o resto do Kon.", FontId::proportional(12.0), fade(Color32::from_white_alpha(128), alpha));
+        p.text(pos2(inner.left(), inner.top() + 10.0), Align2::LEFT_CENTER, if self.sheet_pages { "Pages" } else { "Configurações" }, bold(17.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(inner.left(), inner.top() + 30.0), Align2::LEFT_CENTER, if self.sheet_pages { "Arraste para reordenar. Desligue o que não usa." } else { "Notch, Claude Code e o resto do Kon." }, FontId::proportional(12.0), fade(Color32::from_white_alpha(128), alpha));
+        let mut tab = self.sheet_pages;
+        if seg(ui, &p, pos2(inner.right() - 30.0, inner.top() + 10.0), &[("Ajustes", false), ("Pages", true)], &mut tab, alpha, "sheettab") { self.sheet_pages = tab; self.sheet_scroll = 0.0; }
         let xr = Rect::from_center_size(pos2(inner.right() - 12.0, inner.top() + 10.0), vec2(24.0, 24.0));
         let xresp = ui.interact(xr, ui.id().with("sheetx"), Sense::click());
         if xresp.hovered() { p.circle_filled(xr.center(), 12.0, fade(Color32::from_white_alpha(25), alpha)); }
         p.text(xr.center(), Align2::CENTER_CENTER, ic::X, icon_font(13.0), fade(Color32::from_white_alpha(if xresp.hovered() { 255 } else { 128 }), alpha));
         if xresp.clicked() { self.view = View::Panel; }
         let area = Rect::from_min_max(pos2(inner.left(), inner.top() + 48.0), inner.max);
+        if self.sheet_pages { self.sheet_pages_list(ui, area, alpha); return; }
         if ui.rect_contains_pointer(area) { self.sheet_scroll -= ui.input(|i| i.smooth_scroll_delta.y); }
         let pc = p.with_clip_rect(area);
         let mut y = area.top() - self.sheet_scroll;
@@ -871,6 +906,72 @@ impl KonApp {
         y += 20.0;
         let total = y + self.sheet_scroll - area.top();
         self.sheet_scroll = self.sheet_scroll.clamp(0.0, (total - area.height()).max(0.0));
+    }
+
+    fn sheet_pages_list(&mut self, ui: &mut egui::Ui, area: Rect, alpha: f32) {
+        let p = ui.painter().with_clip_rect(area);
+        let ids = self.page_ids();
+        let row_h = 40.0; let gap = 4.0;
+        if self.drag_page.is_none() && ui.rect_contains_pointer(area) { self.sheet_scroll -= ui.input(|i| i.smooth_scroll_delta.y); }
+        let total = ids.len() as f32 * (row_h + gap) - gap;
+        self.sheet_scroll = self.sheet_scroll.clamp(0.0, (total - area.height()).max(0.0));
+        // enquanto arrasta perto das bordas, rola sozinho
+        if let (Some(_), Some(pp)) = (self.drag_page, ui.input(|i| i.pointer.interact_pos())) {
+            if pp.y > area.bottom() - 24.0 { self.sheet_scroll = (self.sheet_scroll + 6.0).min((total - area.height()).max(0.0)); }
+            if pp.y < area.top() + 24.0 { self.sheet_scroll = (self.sheet_scroll - 6.0).max(0.0); }
+        }
+        let area = area.translate(vec2(0.0, -self.sheet_scroll));
+        let vis = area.translate(vec2(0.0, self.sheet_scroll));
+        let meta = |id: &str| -> (&'static str, Color32) { match id {
+            "home" => ("Início", Color32::from_rgb(249, 115, 22)), "files" => ("Arquivos", Color32::from_rgb(251, 191, 36)), "clip" => ("Área de transferência", Color32::from_rgb(20, 184, 166)),
+            "music" => ("Música", Color32::from_rgb(236, 72, 153)), "focus" => ("Foco", Color32::from_rgb(255, 107, 91)), "weather" => ("Clima", Color32::from_rgb(14, 165, 233)),
+            "todo" => ("Tarefas", Color32::from_rgb(132, 204, 22)), "claude" => ("Claude Code", Color32::from_rgb(168, 85, 247)), "quick" => ("Atalhos", Color32::from_rgb(250, 204, 21)),
+            "system" => ("Sistema", Color32::from_rgb(148, 163, 184)), _ => ("Água", Color32::from_rgb(56, 189, 248)) } };
+        let on_count = ids.iter().filter(|i| !self.settings.pages_off.contains(i)).count();
+        // arrastando: a linha segue o mouse e as outras abrem espaço
+        let ptr = ui.input(|i| i.pointer.interact_pos());
+        let mut order: Vec<usize> = (0..ids.len()).collect();
+        let mut target = None;
+        if let (Some((from, grab_dy)), Some(pp)) = (self.drag_page, ptr) {
+            let y = pp.y - grab_dy;
+            let t = (((y - area.top()) / (row_h + gap)).round() as isize).clamp(0, ids.len() as isize - 1) as usize;
+            let it = order.remove(from); order.insert(t, it); target = Some((t, y));
+        }
+        let mut toggle_id: Option<String> = None;
+        let mut drag_start: Option<(usize, f32)> = None;
+        for (slot, &i) in order.iter().enumerate() {
+            let id = &ids[i];
+            let dragging = self.drag_page.map_or(false, |d| d.0 == i);
+            let y = if dragging { target.map_or(area.top(), |t| t.1) } else { area.top() + slot as f32 * (row_h + gap) };
+            let rr = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row_h));
+            if dragging {
+                p.rect_filled(rr.expand(2.0).translate(vec2(0.0, 6.0)), CornerRadius::same(14), fade(Color32::from_black_alpha(110), alpha));
+                p.rect_filled(rr, CornerRadius::same(12), fade(Color32::from_rgb(38, 38, 40), alpha));
+            } else { p.rect_filled(rr, CornerRadius::same(12), fade(Color32::from_white_alpha(10), alpha)); }
+            let on = !self.settings.pages_off.contains(id);
+            let grip = Rect::from_center_size(pos2(rr.left() + 18.0, rr.center().y), vec2(24.0, 32.0));
+            let g = ui.interact(grip.intersect(vis), ui.id().with(("grip", id.as_str())), Sense::drag());
+            if g.hovered() || dragging { ui.ctx().set_cursor_icon(if dragging { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab }); }
+            p.text(grip.center(), Align2::CENTER_CENTER, ic::GRIP_HORIZONTAL, icon_font(16.0), fade(Color32::from_white_alpha(if g.hovered() || dragging { 178 } else { 90 }), alpha));
+            if g.drag_started() { if let Some(pp) = ptr { drag_start = Some((i, pp.y - rr.top())); } }
+            let (label, col) = meta(id);
+            let sq = Rect::from_center_size(pos2(rr.left() + 48.0, rr.center().y), vec2(28.0, 28.0));
+            p.rect_filled(sq, CornerRadius::same(8), fade(col, alpha));
+            p.text(sq.center(), Align2::CENTER_CENTER, Page::from(id).icon(), icon_font(15.0), fade(Color32::WHITE, alpha));
+            p.text(pos2(sq.right() + 12.0, rr.center().y), Align2::LEFT_CENTER, label, FontId::proportional(13.5), fade(Color32::from_white_alpha(if on { 255 } else { 102 }), alpha));
+            if vis.contains(pos2(rr.right() - 28.0, rr.center().y)) && toggle_c(ui, &p, pos2(rr.right() - 28.0, rr.center().y), on, alpha, Color32::from_rgb(16, 185, 129)).clicked() && !(on && on_count <= 1) { toggle_id = Some(id.clone()); }
+        }
+        if let Some(d) = drag_start { self.drag_page = Some(d); }
+        if self.drag_page.is_some() && !ui.input(|i| i.pointer.primary_down()) {
+            // soltou: grava a nova ordem
+            let new: Vec<String> = order.iter().map(|&i| ids[i].clone()).collect();
+            self.settings.page_order = new; self.settings.save(); self.drag_page = None;
+        }
+        if self.drag_page.is_some() { ui.ctx().request_repaint(); }
+        if let Some(id) = toggle_id {
+            if let Some(k) = self.settings.pages_off.iter().position(|x| *x == id) { self.settings.pages_off.remove(k); } else { self.settings.pages_off.push(id); }
+            self.settings.save();
+        }
     }
 
     fn page_files(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {

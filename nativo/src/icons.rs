@@ -64,3 +64,6 @@ pub const HARD_DRIVE: char = '\u{e0ed}';
 pub const APP_WINDOW: char = '\u{e426}';
 pub const LINK_2: char = '\u{e103}';
 pub const EYE_OFF: char = '\u{e0bb}';
+pub const GRIP_HORIZONTAL: char = '\u{e0ea}';
+pub const MIC: char = '\u{e118}';
+pub const CAMERA: char = '\u{e064}';
