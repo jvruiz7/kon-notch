@@ -1,5 +1,5 @@
 import React from "react";
-import { Asterisk, Music2, Timer, GlassWater, CloudSun, ListTodo, LayoutGrid, FolderOpen, ClipboardList, Zap, Cpu, SlidersHorizontal } from "lucide-react";
+import { Asterisk, Music2, Timer, GlassWater, CloudSun, ListTodo, LayoutGrid, FolderOpen, ClipboardList, Zap, Cpu } from "lucide-react";
 
 /* Física & constantes */
 export const SPRING = { type: "spring", stiffness: 380, damping: 30, mass: 0.8 };
@@ -21,7 +21,6 @@ export const PAGE_META = {
   files: { label: "Arquivos", nav: "ARQUIVOS", Icon: FolderOpen, sq: "bg-amber-400" },
   clip: { label: "Área de transferência", nav: "CLIPS", Icon: ClipboardList, sq: "bg-teal-500" },
   music: { label: "Music", nav: "MUSIC", Icon: Music2, sq: "bg-pink-500" },
-  sound: { label: "Som", nav: "SOM", Icon: SlidersHorizontal, sq: "bg-violet-500" },
   focus: { label: "Focus", nav: "FOCUS", Icon: Timer, sq: "bg-[#ff6b5b]" },
   weather: { label: "Clima", nav: "CLIMA", Icon: CloudSun, sq: "bg-sky-500" },
   todo: { label: "To-do", nav: "TO-DO", Icon: ListTodo, sq: "bg-lime-500" },
@@ -30,7 +29,7 @@ export const PAGE_META = {
   system: { label: "Sistema", nav: "SISTEMA", Icon: Cpu, sq: "bg-slate-400" },
   water: { label: "Water", nav: "WATER", Icon: GlassWater, sq: "bg-sky-400" },
 };
-export const DEFAULT_ORDER = ["home", "files", "clip", "music", "sound", "weather", "focus", "todo", "claude", "quick", "system", "water"];
+export const DEFAULT_ORDER = ["home", "files", "clip", "music", "weather", "focus", "todo", "claude", "quick", "system", "water"];
 
 export const DURATION = 195;
 export const CLAUDE_STEP = 3;

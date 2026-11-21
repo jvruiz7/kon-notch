@@ -12,7 +12,7 @@ ps.stdout.on("data", (d) => { psBuf += d; if (psBuf.includes("@@OK")) { const r 
 const run = (cmd) => new Promise((res) => { psWait = res; ps.stdin.write(cmd + "\nWrite-Output '@@OK'\n"); });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 (async () => {
-  await run(`Add-Type -AssemblyName System.Drawing,System.Windows.Forms; Add-Type 'using System;using System.Runtime.InteropServices;public class M{[DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);[DllImport("user32.dll")]public static extern void mouse_event(int f,int x,int y,int d,int e);[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();[DllImport("user32.dll")]public static extern int GetWindowText(IntPtr h,System.Text.StringBuilder s,int n);}'`);
+  await run(`Add-Type -AssemblyName System.Drawing,System.Windows.Forms; Add-Type 'using System;using System.Runtime.InteropServices;public class M{[DllImport("user32.dll")]public static extern bool SetCursorPos(int x,int y);[DllImport("user32.dll")]public static extern void mouse_event(int f,int x,int y,int d,int e);[DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();[DllImport("user32.dll")]public static extern int GetWindowText(IntPtr h,System.Text.StringBuilder s,int n);[DllImport("user32.dll")]public static extern IntPtr FindWindow(string c,string t);[StructLayout(LayoutKind.Sequential)]public struct R{public int l,t,r,b;}[DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out R r);[DllImport("user32.dll")]public static extern bool SetProcessDPIAware();public delegate bool EP(IntPtr h,IntPtr l);[DllImport("user32.dll")]public static extern bool EnumWindows(EP f,IntPtr l);[DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);[DllImport("user32.dll")]public static extern bool IsWindowVisible(IntPtr h);public static string Biggest(uint[] pids){string best="0,0,0,0";long area=0;EnumWindows(delegate(IntPtr h,IntPtr l){uint p;GetWindowThreadProcessId(h,out p);if(Array.IndexOf(pids,p)<0||!IsWindowVisible(h))return true;R r;GetWindowRect(h,out r);long a=(long)(r.r-r.l)*(r.b-r.t);if(a>area&&a<4000000){area=a;best=r.l+","+r.t+","+r.r+","+r.b;}return true;},IntPtr.Zero);return best;}}'`);
   const move = (x, y) => run(`[M]::SetCursorPos(${Math.round(x)},${Math.round(y)})`);
   const glide = async (x, y) => { for (let k = 6; k >= 0; k--) { await move(x + k * 9, y + k * 14); await sleep(25); } };
   const click = async (x, y) => { await move(x, y); await sleep(60); await run(`[M]::mouse_event(2,0,0,0,0); Start-Sleep -Milliseconds 40; [M]::mouse_event(4,0,0,0,0)`); };
@@ -29,9 +29,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   page.on("pageerror", (e) => log("PAGEERROR", e.message));
   page.on("console", (m) => { if (["error", "warning"].includes(m.type())) log("CONSOLE", m.type(), m.text().slice(0, 300)); });
   await sleep(1500);
+  await run(`[void][M]::SetProcessDPIAware()`);
+  const title = await page.title();
+  const wr = (await run(`$ids=[uint32[]]@(Get-Process electron | ForEach-Object { $_.Id }); Write-Output ("WR=" + [M]::Biggest($ids))`)).match(/WR=(-?\d+),(-?\d+),(-?\d+),(-?\d+)/).slice(1).map(Number);
   const win = await page.evaluate(() => ({ x: window.screenX, y: window.screenY, w: innerWidth, h: innerHeight, dpr: devicePixelRatio, sw: screen.width }));
-  log("janela", JSON.stringify(win), "foreground:", await fg());
-  const S = (r) => ({ x: win.x + r.x + r.w / 2, y: win.y + r.y + r.h / 2 });
+  log("janela", JSON.stringify(win), "retângulo físico:", wr.join(","), "foreground:", await fg());
+  const kx = (wr[2] - wr[0]) / win.w, ky = (wr[3] - wr[1]) / win.h;
+  win.x = wr[0]; win.y = wr[1];
+  const S = (r) => ({ x: wr[0] + (r.x + r.w / 2) * kx, y: wr[1] + (r.y + r.h / 2) * ky });
   const rectOf = (sel) => page.evaluate((sel) => {
     const pick = (s) => { if (s.title) return [...document.querySelectorAll("button")].find((b) => b.title === s.title); if (s.text) return [...document.querySelectorAll("button,div,span")].find((b) => b.textContent.trim() === s.text && b.offsetParent); if (s.idx != null) return document.querySelectorAll(s.nav)[s.idx]; };
     const el = pick(sel); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height };
@@ -40,13 +45,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const t = document.body.innerText;
     return { sheet: /Configurações|Arraste para reordenar/.test(t), panel: !!([...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages")), tab: (() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages"); if (!g) return ""; const nav = [...g.parentElement.parentElement.querySelectorAll("button")]; return (nav.find((b) => !b.title && b.innerText.trim().length > 2)?.innerText || "").trim(); })(), sheetTitle: (document.querySelector("h2,h3")?.innerText || "") };
   });
-  const cx = win.x + win.w / 2;
+  const cx = wr[0] + (wr[2] - wr[0]) / 2;
   await shot("inicio");
 
   log("1) passa o mouse no notch");
-  await glide(cx, win.y + 14); await sleep(700);
+  await glide(cx, wr[1] + 14 * ky); await sleep(700);
   log("estado", JSON.stringify(await state())); await shot("hover");
-  if (!(await state()).panel) { log("  (hover não abriu; clicando no notch)"); await click(cx, win.y + 14); await sleep(700); log("  ", JSON.stringify(await state())); }
+  if (!(await state()).panel) { log("  (hover não abriu; clicando no notch)"); await click(cx, wr[1] + 14 * ky); await sleep(700); log("  ", JSON.stringify(await state())); }
 
   log("2) clica em cada página da barra");
   const navCount = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")] : []; return window.__nav.length; });
@@ -64,7 +69,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   log("3) abre Ajustes pela engrenagem");
   let r = await rectOf({ title: "Ajustes e Pages" });
-  if (!r) { await move(cx, win.y + 14); await sleep(700); r = await rectOf({ title: "Ajustes e Pages" }); }
+  if (!r) { await move(cx, wr[1] + 14 * ky); await sleep(700); r = await rectOf({ title: "Ajustes e Pages" }); }
   log("engrenagem", JSON.stringify(r));
   if (r) { const p = S(r); await click(p.x, p.y); }
   for (const ms of [150, 400, 900, 1600]) { await sleep(ms === 150 ? 150 : ms - 150); log(`  +${ms} ms`, JSON.stringify(await state()), "fg:", await fg()); }
@@ -81,11 +86,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   log("select", JSON.stringify(r));
   if (r) { const p = S(r); await click(p.x, p.y); await sleep(900); await shot("select-aberto"); log("  com o select aberto", JSON.stringify(await state()), "fg:", await fg()); await run(`[System.Windows.Forms.SendKeys]::SendWait("{ESC}")`); await sleep(500); log("  depois do ESC", JSON.stringify(await state())); }
   // rolar dentro dos ajustes
-  await move(cx, win.y + 300); await run(`[M]::mouse_event(0x800,0,0,-360,0)`); await sleep(500); await shot("rolou"); log("  depois de rolar", JSON.stringify(await state()));
+  await move(cx, wr[1] + 300 * ky); await run(`[M]::mouse_event(0x800,0,0,-360,0)`); await sleep(500); await shot("rolou"); log("  depois de rolar", JSON.stringify(await state()));
 
   log("4) clique fora (no Bloco de Notas) e volta");
   await click(cx + 500, 700); await sleep(800); log("  ", JSON.stringify(await state()), "fg:", await fg());
-  await glide(cx, win.y + 14); await sleep(800); log("  hover de novo", JSON.stringify(await state())); await shot("hover2");
+  await glide(cx, wr[1] + 14 * ky); await sleep(800); log("  hover de novo", JSON.stringify(await state())); await shot("hover2");
 
   log("5) cliques rápidos alternando páginas (40 cliques)");
   const ids = await page.evaluate(() => { const g = [...document.querySelectorAll("button")].find((b) => b.title === "Ajustes e Pages"); window.__nav = g ? [...g.parentElement.parentElement.querySelectorAll("button")].filter((b) => b.offsetParent && !b.title) : []; return window.__nav.length; });

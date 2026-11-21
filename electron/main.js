@@ -261,7 +261,13 @@ let followTick = 0;
 let pageCursor = null; // { x, y, at } | null
 let lastMismatchLog = 0;
 const insideRects = (x, y) => hitRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
-function systemRel() { const p = screen.getCursorScreenPoint(); const b = win.getBounds(); return { x: p.x - b.x, y: p.y - b.y }; }
+// cursor do sistema → coordenadas da página (CSS px). Se a página não tiver o mesmo tamanho da janela
+// (escala dupla do Windows com monitores de DPI diferentes, zoom), converte pela proporção real.
+function systemRel() {
+  const p = screen.getCursorScreenPoint(); const b = win.getBounds();
+  const kx = viewport?.vw && b.width ? viewport.vw / b.width : 1, ky = viewport?.vh && b.height ? viewport.vh / b.height : 1;
+  return { x: (p.x - b.x) * kx, y: (p.y - b.y) * ky };
+}
 function hitTick() {
   if (!win || win.isDestroyed() || !win.isVisible()) return;
   if (pinned) return setInteractive(true);
@@ -296,7 +302,14 @@ ipcMain.on("hit:cursor", (_e, pt) => {
   }
   hitTick(); // responde na hora, sem esperar o próximo ciclo de 40 ms
 });
-ipcMain.on("hit:rects", (_e, rects) => { hitRects = Array.isArray(rects) ? rects : []; diag("regioes", { r: hitRects.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)]) }); });
+let viewport = null; // { vw, vh, dpr } da página
+ipcMain.on("hit:rects", (_e, msg) => {
+  const rects = Array.isArray(msg) ? msg : msg?.rects;
+  hitRects = Array.isArray(rects) ? rects : [];
+  if (msg && !Array.isArray(msg) && msg.vw) viewport = { vw: +msg.vw, vh: +msg.vh, dpr: +msg.dpr || 1 };
+  diag("regioes", { r: hitRects.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)]), viewport });
+});
+ipcMain.on("hit:viewport", (_e, v) => { if (v?.vw) { viewport = { vw: +v.vw, vh: +v.vh, dpr: +v.dpr || 1 }; diag("viewport", viewport); } });
 ipcMain.on("diag", (_e, ev) => { if (ev && typeof ev === "object") { const { e, ...rest } = ev; diag("ui:" + String(e || "?").slice(0, 30), rest); } });
 // O Kon só pega o foco do teclado quando você vai digitar (Perguntar, Ajustes, OCR, nova tarefa).
 // Clicar nos botões do notch não rouba o foco da janela em que você estava trabalhando.
@@ -899,6 +912,7 @@ ipcMain.handle("report:make", async (_e, { note = "", withShot = false } = {}) =
       claudeHooks: (() => { try { return hooksState(readClaudeSettings()); } catch { return null; } })(),
       telas: screen.getAllDisplays().map((d) => ({ x: d.bounds.x, y: d.bounds.y, w: d.bounds.width, h: d.bounds.height, escala: d.scaleFactor, principal: d.id === screen.getPrimaryDisplay().id, kon: d.id === curDisplayId })),
       janela: (() => { try { return win.getBounds(); } catch { return null; } })(),
+      pagina: viewport, // tamanho da página em CSS px; diferente da janela = escala dupla/zoom
       ajustes: pub, nota: String(note).slice(0, 2000),
     };
     fs.writeFileSync(path.join(dir, "info.json"), JSON.stringify(info, null, 2));
