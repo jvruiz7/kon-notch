@@ -37,8 +37,6 @@ jobs:
           foreach ($f in 'kon-error.log','kon-helper.log') { $x = Join-Path $d $f; if (Test-Path $x) { Write-Host "--- $f"; Get-Content $x -Tail 40 } }
           Write-Host "--- settings.json (não pode ter geminiKey)"; Get-Content (Join-Path $d 'settings.json')
           Copy-Item (Join-Path $d 'settings.json') "$env:RUNNER_TEMP\probe\settings-depois.json"
-          $rel = Get-ChildItem $env:TEMP -Directory -Filter 'kon-relatorio-*' | Sort-Object LastWriteTime | Select-Object -Last 1
-          if ($rel) { Copy-Item "$($rel.FullName)\*" "$env:RUNNER_TEMP\probe\relatorio" -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\probe\relatorio" | Out-Null; Copy-Item "$($rel.FullName)\*" "$env:RUNNER_TEMP\probe\relatorio\" -Force }
       - name: Publica os prints num branch
         if: always()
         shell: pwsh

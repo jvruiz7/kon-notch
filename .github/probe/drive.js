@@ -103,6 +103,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await run(`[System.Windows.Forms.SendKeys]::SendWait("^%( )")`); await sleep(900); log("  ", JSON.stringify(await state()), "foco:", await page.evaluate(() => document.activeElement?.tagName), "fg:", await fg()); await shot("perguntar");
   log("7) gera um relatório de problemas (deve trazer cliques.json e nenhuma chave)");
   log("  ", JSON.stringify(await page.evaluate(() => window.kon.report({ note: "sonda", withShot: false }).then((r) => ({ ok: r?.ok, err: r?.error })))));
+  await sleep(1500);
+  try { const os = require("os"); const d = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("kon-relatorio-")).sort().pop(); for (const f of fs.readdirSync(path.join(os.tmpdir(), d))) fs.copyFileSync(path.join(os.tmpdir(), d, f), path.join(OUT, "rel-" + f)); log("  relatório copiado", d); } catch (e) { log("  sem relatório", e.message); }
   log("FIM");
   await browser.close().catch(() => {});
   ps.stdin.end(); process.exit(0);
