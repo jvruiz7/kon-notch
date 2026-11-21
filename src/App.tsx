@@ -952,7 +952,13 @@ export default function KonIsland() {
   useEffect(() => {
     let lastMove = 0;
     const label = (el) => { const b = el?.closest?.("button,a,input,select,textarea,[role=button]"); if (!b) return el?.tagName?.toLowerCase() || "?"; return (b.title || b.getAttribute("aria-label") || b.tagName.toLowerCase() + (b.type ? ":" + b.type : "")).slice(0, 40); };
-    const down = (e) => bridge.diag?.({ e: "clique", x: Math.round(e.clientX), y: Math.round(e.clientY), alvo: label(e.target), botao: e.button });
+    // o que está empilhado sob o clique (tags/classes e posição, sem textos): mostra se algo invisível cobre um botão
+    const desc = (el) => { const r = el.getBoundingClientRect(); const c = typeof el.className === "string" ? el.className : el.className?.baseVal || ""; return `${el.tagName.toLowerCase()}.${c.split(/\s+/).slice(0, 6).join(".")} [${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}x${Math.round(r.height)}] op=${getComputedStyle(el).opacity}`; };
+    const down = (e) => {
+      let pilha = [];
+      try { pilha = document.elementsFromPoint(e.clientX, e.clientY).slice(0, 6).map(desc); } catch {}
+      bridge.diag?.({ e: "clique", x: Math.round(e.clientX), y: Math.round(e.clientY), alvo: label(e.target), botao: e.button, pilha });
+    };
     // a posição do cursor vista pela própria página é a referência do click-through (imune a escala/vários monitores)
     let raf = 0, px = 0, py = 0;
     const move = (e) => {
@@ -960,7 +966,9 @@ export default function KonIsland() {
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; bridge.cursor?.(px, py); });
       const n = performance.now(); if (n - lastMove < 400) return; lastMove = n; bridge.diag?.({ e: "mouse", x: Math.round(e.clientX), y: Math.round(e.clientY) });
     };
-    const out = (e) => { if (!e.relatedTarget) bridge.cursor?.(null); }; // saiu da janela: o main volta a usar o cursor do sistema
+    // "mouseout" sem destino acontece também quando o Windows troca o click-through ou aparece uma dica (title):
+    // não descarta a posição; o main só a usa enquanto o cursor do sistema estiver parado no mesmo ponto
+    const out = () => {};
     document.addEventListener("pointerdown", down, true);
     document.addEventListener("mousemove", move, true);
     document.addEventListener("mouseout", out, true);
