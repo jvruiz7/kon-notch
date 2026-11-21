@@ -554,7 +554,7 @@ export default function KonIsland() {
   };
   /* Mixer (página Música): atualiza a cada 3 s enquanto aberto */
   useEffect(() => {
-    if (!mixOpen || view !== "panel" || tab !== "music") return;
+    if (view !== "panel" || !((mixOpen && tab === "music") || tab === "sound")) return;
     let alive = true;
     const load = () => bridge.mixGet().then((m) => alive && m && setMix(m));
     load();
@@ -1979,6 +1979,42 @@ export default function KonIsland() {
   const memPct = sys ? Math.round((sys.mem.used / sys.mem.total) * 100) : 0;
   const diskPct = sys?.disk ? Math.round(((sys.disk.total - sys.disk.free) / sys.disk.total) * 100) : 0;
   const barC = (p) => (p >= 90 ? "bg-red-400" : p >= 75 ? "bg-amber-400" : "bg-emerald-400");
+  /* Som: saída de áudio (onde o som sai) e volume por app — o "painel de som" do Kon */
+  const SoundTab = (
+    <div className="h-full grid grid-cols-[1fr_1.25fr] gap-2.5">
+      <div className={`${card} bg-white/[0.03] flex flex-col min-h-0`}>
+        <div className="text-[10px] font-semibold tracking-[0.1em] text-white/40">ONDE O SOM SAI</div>
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 mt-2 [scrollbar-width:none]">
+          {(mix?.devices || []).map((d) => (
+            <button key={d.id} onClick={async () => { setMix((m) => ({ ...m, devices: m.devices.map((x) => ({ ...x, default: x.id === d.id })) })); const r = await bridge.mixSetDevice(d.id); if (r?.ok) setMix(r); else toast("Não consegui trocar a saída de som", "error", "x"); }}
+              className={`min-h-[30px] px-3 rounded-xl flex items-center gap-2 text-left text-[12px] transition-colors ${d.default ? "bg-white text-black font-semibold" : "bg-white/[0.05] text-white/80 hover:bg-white/[0.1]"}`}>
+              <Volume2 size={13} className="shrink-0" /><span className="truncate">{d.name}</span>{d.default && <Check size={13} className="ml-auto shrink-0" />}
+            </button>
+          ))}
+          {!mix && <span className="text-[11px] text-white/40">{REAL ? "Lendo os dispositivos de som…" : ""}</span>}
+          {mix && (!mix.ok || mix.deviceError) && <span className="text-[11px] text-amber-300/85 leading-snug">Não consegui ler as saídas de som do Windows{mix.deviceError || mix.error ? `: ${(mix.deviceError || mix.error).slice(0, 90)}` : ""}</span>}
+          {mix?.ok && !mix.deviceError && !mix.devices?.length && <span className="text-[11px] text-white/40">Nenhuma saída de som ativa</span>}
+        </div>
+      </div>
+      <div className={`${card} bg-white/[0.03] flex flex-col min-h-0`}>
+        <div className="text-[10px] font-semibold tracking-[0.1em] text-white/40">VOLUME POR APP</div>
+        <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1 mt-2 [scrollbar-width:none]">
+          {(mix?.apps || []).map((a) => (
+            <div key={a.name} className="flex items-center gap-2 h-[26px]">
+              <button onClick={async () => { setMix((m) => ({ ...m, apps: m.apps.map((x) => (x.name === a.name ? { ...x, muted: !x.muted } : x)) })); bridge.mixAppMute(a.pids, !a.muted); }}
+                className={`w-6 h-6 grid place-items-center rounded-full shrink-0 ${a.muted ? "text-red-300" : "text-white/60 hover:text-white"}`}>{a.muted ? <VolumeX size={13} /> : <Volume2 size={13} />}</button>
+              <span className="w-[96px] text-[11.5px] truncate" title={a.title}>{a.title}</span>
+              <input type="range" min="0" max="100" value={a.volume} onChange={(e) => setAppVol(a, +e.target.value)} className="kon-range flex-1" />
+              <span className="w-7 text-right text-[10.5px] tabular-nums text-white/50">{a.volume}</span>
+            </div>
+          ))}
+          {mix?.ok && mix.appsError && <span className="text-[11px] text-amber-300/85">Não consegui ler o volume dos apps</span>}
+          {mix?.ok && !mix.appsError && !mix.apps?.length && <span className="text-[11px] text-white/40">Nenhum app tocando som agora</span>}
+        </div>
+      </div>
+    </div>
+  );
+
   const SystemTab = !sys ? <div className="h-full grid place-items-center text-[12px] text-white/45">Lendo o sistema…</div> : (
     <div className="h-full grid grid-cols-[1fr_1fr] gap-2.5">
       <div className="grid grid-cols-2 gap-2">
@@ -2018,7 +2054,7 @@ export default function KonIsland() {
     </div>
   );
 
-  const TABS = { home: HomeTab, files: FilesTab, clip: ClipTab, quick: QuickTab, system: SystemTab, music: MusicTab, focus: FocusTab, water: WaterTab, weather: WeatherTab, todo: TodoTab, claude: ClaudeTab, sleep: SleepTab, lock: LockTab };
+  const TABS = { sound: SoundTab, home: HomeTab, files: FilesTab, clip: ClipTab, quick: QuickTab, system: SystemTab, music: MusicTab, focus: FocusTab, water: WaterTab, weather: WeatherTab, todo: TodoTab, claude: ClaudeTab, sleep: SleepTab, lock: LockTab };
   const UTIL = [
     { id: "sleep", nav: "SLEEP", Icon: Moon, on: dnd || sleepLeft !== null, color: "text-indigo-300" },
     { id: "lock", nav: "LOCK", Icon: locked ? Lock : LockOpen, on: locked || privacy, color: "text-amber-300" },

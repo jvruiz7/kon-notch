@@ -253,18 +253,23 @@ function Invoke-Mix($c) {
     if ($c.cmd -eq 'setdev') { [KonMix]::SetDefault([string]$c.value) }
     elseif ($c.cmd -eq 'appvol') { [KonMix]::SetApp([uint32[]]@($c.pids), [int]$c.volume, -1) }
     elseif ($c.cmd -eq 'appmute') { [KonMix]::SetApp([uint32[]]@($c.pids), -1, [int]$c.mute) }
+    # saídas e apps são lidos separadamente: falhar um não esconde o outro
     $def = ''; try { $def = [KonMix]::DefaultId() } catch {}
-    $devs = @(); foreach ($l in [KonMix]::Devices()) { $p = $l -split "`t", 2; $devs += @{ id = $p[0]; name = $p[1]; default = ($p[0] -eq $def) } }
-    $apps = @{}
-    foreach ($l in [KonMix]::Apps()) {
-      $p = $l -split "`t"; $procId = [int]$p[0]
-      $name = 'Sons do sistema'; $title = ''
-      if ($procId -ne 0) { try { $pr = Get-Process -Id $procId -ErrorAction Stop; $name = $pr.ProcessName; try { $title = $pr.MainModule.FileVersionInfo.FileDescription } catch {} } catch { continue } }
-      if (-not $title) { $title = $name }
-      if ($apps.ContainsKey($name)) { $apps[$name].pids += $procId }
-      else { $apps[$name] = @{ name = $name; title = $title; pids = @($procId); volume = [int]$p[1]; muted = ($p[2] -eq '1') } }
-    }
-    Emit @{ type = 'mix'; id = $c.id; ok = $true; devices = @($devs); apps = @($apps.Values) }
+    $devs = @(); $devErr = $null
+    try { foreach ($l in [KonMix]::Devices()) { $p = $l -split "`t", 2; $devs += @{ id = $p[0]; name = $p[1]; default = ($p[0] -eq $def) } } }
+    catch { $devErr = $_.Exception.InnerException.Message; if (-not $devErr) { $devErr = $_.Exception.Message }; if ($script:lastDevErr -ne $devErr) { $script:lastDevErr = $devErr; Emit @{ type = 'error'; scope = 'mix-saidas'; message = $devErr } } }
+    $apps = @{}; $appErr = $null
+    try {
+      foreach ($l in [KonMix]::Apps()) {
+        $p = $l -split "`t"; $procId = [int]$p[0]
+        $name = 'Sons do sistema'; $title = ''
+        if ($procId -ne 0) { try { $pr = Get-Process -Id $procId -ErrorAction Stop; $name = $pr.ProcessName; try { $title = $pr.MainModule.FileVersionInfo.FileDescription } catch {} } catch { continue } }
+        if (-not $title) { $title = $name }
+        if ($apps.ContainsKey($name)) { $apps[$name].pids += $procId }
+        else { $apps[$name] = @{ name = $name; title = $title; pids = @($procId); volume = [int]$p[1]; muted = ($p[2] -eq '1') } }
+      }
+    } catch { $appErr = $_.Exception.InnerException.Message; if (-not $appErr) { $appErr = $_.Exception.Message }; if ($script:lastAppErr -ne $appErr) { $script:lastAppErr = $appErr; Emit @{ type = 'error'; scope = 'mix-apps'; message = $appErr } } }
+    Emit @{ type = 'mix'; id = $c.id; ok = ($null -eq $devErr -or $null -eq $appErr); devices = @($devs); apps = @($apps.Values); deviceError = $devErr; appsError = $appErr }
   } catch { Emit @{ type = 'mix'; id = $c.id; ok = $false; error = $_.Exception.Message } }
 }
 
