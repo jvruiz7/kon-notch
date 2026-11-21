@@ -15,11 +15,15 @@ pub struct Settings {
     pub water_count: u32,
     pub sys_alerts: bool,
     pub claude_plan: String,
+    pub display: String,
+    pub dnd: bool,
+    pub locked: bool,
+    pub privacy: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into() }
+        Settings { open_mode: "hover".into(), approvals: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true, claude_plan: "auto".into(), display: "primary".into(), dnd: false, locked: false, privacy: false }
     }
 }
 

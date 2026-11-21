@@ -63,3 +63,4 @@ pub const MEMORY_STICK: char = '\u{e445}';
 pub const HARD_DRIVE: char = '\u{e0ed}';
 pub const APP_WINDOW: char = '\u{e426}';
 pub const LINK_2: char = '\u{e103}';
+pub const EYE_OFF: char = '\u{e0bb}';

@@ -32,13 +32,13 @@ const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AG
 enum View { Compact, Panel, Perm, Sheet }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Page { Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
+enum Page { Sleep, Lock, Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
 
 impl Page {
-    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Clip => "clip", Page::Files => "files", Page::Claude => "claude", Page::Quick => "quick", Page::Water => "water", Page::System => "system", Page::Settings => "settings" } }
-    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "clip" => Page::Clip, "files" => Page::Files, "claude" => Page::Claude, "quick" => Page::Quick, "water" => Page::Water, "system" => Page::System, _ => Page::Home } }
-    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Clip => "CLIPS", Page::Files => "ARQUIVOS", Page::Claude => "CLAUDE", Page::Quick => "ATALHOS", Page::Water => "ÁGUA", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
-    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Clip => ic::CLIPBOARD_LIST, Page::Files => ic::FOLDER_OPEN, Page::Claude => ic::ASTERISK, Page::Quick => ic::ZAP, Page::Water => ic::GLASS_WATER, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
+    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Clip => "clip", Page::Files => "files", Page::Claude => "claude", Page::Quick => "quick", Page::Water => "water", Page::Sleep => "sleep", Page::Lock => "lock", Page::System => "system", Page::Settings => "settings" } }
+    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "clip" => Page::Clip, "files" => Page::Files, "claude" => Page::Claude, "quick" => Page::Quick, "water" => Page::Water, "sleep" => Page::Sleep, "lock" => Page::Lock, "system" => Page::System, _ => Page::Home } }
+    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Clip => "CLIPS", Page::Files => "ARQUIVOS", Page::Claude => "CLAUDE", Page::Quick => "ATALHOS", Page::Water => "ÁGUA", Page::Sleep => "DESCANSO", Page::Lock => "TRAVAR", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
+    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Clip => ic::CLIPBOARD_LIST, Page::Files => ic::FOLDER_OPEN, Page::Claude => ic::ASTERISK, Page::Quick => ic::ZAP, Page::Water => ic::GLASS_WATER, Page::Sleep => ic::MOON, Page::Lock => ic::LOCK_OPEN, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
     /// cor do ícone "ligado" (mesmas do Kon atual)
     fn color(self) -> Color32 { match self { Page::Music => Color32::from_rgb(244, 114, 182), Page::Weather => Color32::from_rgb(56, 189, 248), Page::Focus => Color32::from_rgb(255, 107, 91), Page::Todo => Color32::from_rgb(163, 230, 53), _ => Color32::from_rgb(251, 146, 60) } }
 }
@@ -60,7 +60,7 @@ impl Spring {
 
 /// Estado compartilhado com a thread que vigia o cursor (a janela é "fantasma" quando o mouse está fora do notch).
 #[derive(Default)]
-struct Hit { rect: Option<Rect>, ppp: f32, inside: bool }
+struct Hit { rect: Option<Rect>, ppp: f32, inside: bool, compact: bool, follow: bool }
 
 struct Focus { total: u32, left: f32, running_until: Option<Instant>, finished_at: Option<Instant> }
 
@@ -100,6 +100,7 @@ pub struct KonApp {
     claude_usage_tab: bool,
     usage_at: Option<Instant>,
     sheet_scroll: f32,
+    sleep_until: Option<Instant>,
     art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
@@ -139,7 +140,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -183,8 +184,9 @@ impl eframe::App for KonApp {
         // 1º quadro: centraliza no topo do monitor e tira da barra de tarefas
         if !self.placed {
             if let Some(ms) = ctx.input(|i| i.viewport().monitor_size) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(((ms.x - WIN_W) / 2.0).round(), 0.0)));
+                if !cfg!(windows) { ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos2(((ms.x - WIN_W) / 2.0).round(), 0.0))); }
                 crate::platform::make_tool_window();
+                crate::platform::place(self.settings.display == "cursor");
                 self.placed = true;
             }
         }
@@ -202,6 +204,8 @@ impl eframe::App for KonApp {
             let mut h = self.hit.lock().unwrap();
             h.rect = Some(island.expand2(vec2(6.0, 4.0)));
             h.ppp = ctx.pixels_per_point();
+            h.compact = self.view == View::Compact;
+            h.follow = self.settings.display == "cursor";
             if cfg!(windows) { h.inside } else { ctx.input(|i| i.pointer.hover_pos()).map_or(false, |p| island.contains(p)) }
         };
         if self.passthrough == inside {
@@ -223,7 +227,7 @@ impl eframe::App for KonApp {
         // abrir ao passar o mouse (com um respiro de 90 ms) e fechar ao sair (280 ms de tolerância)
         if inside {
             self.leave_since = None;
-            if self.view == View::Compact && self.settings.open_mode != "click" && !has_perm {
+            if self.view == View::Compact && self.settings.open_mode != "click" && !has_perm && !self.settings.locked {
                 let t = *self.hover_since.get_or_insert(now);
                 if now - t > Duration::from_millis(if self.settings.open_mode == "delay" { 450 } else { 110 }) { self.view = View::Panel; }
             }
@@ -242,7 +246,9 @@ impl eframe::App for KonApp {
         if want_focus != self.focusable { self.focusable = want_focus; crate::platform::set_focusable(want_focus); }
         if self.view == View::Compact { self.adding = None; self.editing = false; self.qform = None; self.qedit = false; }
         // aviso de PC sobrecarregado vindo da thread do sistema
-        if let Some(a) = self.sys.lock().unwrap().alert.take() { self.ctoast = Some((a, now, true)); }
+        if let Some(a) = self.sys.lock().unwrap().alert.take() { if !self.settings.dnd { self.ctoast = Some((a, now, true)); } }
+        // timer para dormir: pausa a música quando acaba
+        if self.sleep_until.map_or(false, |t| now >= t) { self.sleep_until = None; if m.playing { self.media.send(MediaCmd::Toggle); } }
         if self.ctoast.as_ref().map_or(false, |c| c.1.elapsed() >= Duration::from_millis(5300)) { self.ctoast = None; }
 
         // ── animação do tamanho ──
@@ -253,6 +259,7 @@ impl eframe::App for KonApp {
 
         // ── desenho ──
         let blink = now >= self.blink_at;
+        if blink { ctx.request_repaint_after(Duration::from_millis(150)); } // a piscada dura 140 ms, nunca um quadro inteiro de 1 s
         if now > self.blink_at + Duration::from_millis(140) { self.blink_at = now + Duration::from_millis(3600 + (now.elapsed().subsec_millis() as u64 % 1400)); }
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
@@ -359,7 +366,9 @@ impl KonApp {
             return;
         }
         let date = format!("{} {:02} {}", DAYS[now.weekday().num_days_from_sunday() as usize], now.day(), MONTHS[now.month0() as usize]);
-        p.text(pos2(r.left() + 22.0, hy), Align2::LEFT_CENTER, date, bold(11.0), fade(DIM, alpha));
+        p.text(pos2(r.left() + 22.0, hy), Align2::LEFT_CENTER, &date, bold(11.0), fade(DIM, alpha));
+        let temp = self.weather.lock().unwrap().as_ref().map_or("–°".to_string(), |w| format!("{}°", w.temp));
+        p.text(pos2(r.left() + 22.0 + text_w(ui, &date, 11.0) + 6.0, hy), Align2::LEFT_CENTER, temp, bold(11.0), fade(Color32::WHITE, alpha));
         p.text(pos2(r.right() - 22.0, hy), Align2::RIGHT_CENTER, format!("{:02}:{:02}", now.hour(), now.minute()), bold(12.0), fade(Color32::WHITE, alpha));
         draw_tofu(&p, pos2(r.center().x, hy), 0.95, blink, alpha);
 
@@ -375,6 +384,8 @@ impl KonApp {
             Page::Claude => self.page_claude(ui, body, blink, alpha),
             Page::Quick => self.page_quick(ui, body, alpha),
             Page::Water => self.page_water(ui, body, alpha),
+            Page::Sleep => self.page_sleep(ui, body, alpha),
+            Page::Lock => self.page_lock(ui, body, alpha),
             Page::Weather => {}
             Page::Settings => {}
         }
@@ -400,28 +411,37 @@ impl KonApp {
     }
 
     fn nav(&mut self, ui: &mut egui::Ui, bar: Rect, alpha: f32) {
-        // mesma barra do Kon atual: "+" à esquerda, páginas no meio (a ativa vira pílula com nome), engrenagem à direita
+        // mesma barra do Kon atual: "+" à esquerda; no meio as páginas, um divisor, Descanso e Travar, e a engrenagem;
+        // à direita a bolinha de status (verde com música, roxa com o Foco rodando)
         let pages = [Page::Home, Page::Files, Page::Clip, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::Claude, Page::Quick, Page::System, Page::Water];
-        let widths: Vec<f32> = pages.iter().map(|p| if *p == self.page { 30.0 + text_w(ui, p.label(), 10.5) } else { 28.0 }).collect();
-        let total: f32 = widths.iter().sum::<f32>() + 2.0 * (pages.len() as f32 - 1.0);
+        let util = [(Page::Sleep, self.settings.dnd || self.sleep_until.is_some(), Color32::from_rgb(165, 180, 252)), (Page::Lock, self.settings.locked || self.settings.privacy, Color32::from_rgb(252, 211, 77))];
+        let wbtn = |ui: &egui::Ui, pg: Page, active: bool| if active { 29.0 + 6.0 + text_w(ui, pg.label(), 10.5) } else { 29.0 };
+        let mut total: f32 = pages.iter().map(|p| wbtn(ui, *p, self.page == *p)).sum::<f32>() + 2.0 * pages.len() as f32;
+        total += 9.0 + util.iter().map(|u| wbtn(ui, u.0, self.page == u.0) + 2.0).sum::<f32>() + 28.0;
         let mut x = bar.center().x - total / 2.0;
-        for (i, pg) in pages.iter().enumerate() {
-            let active = self.page == *pg;
-            let rr = Rect::from_min_size(pos2(x, bar.center().y - 14.0), vec2(widths[i], 28.0));
+        let mut btn = |ui: &mut egui::Ui, x: &mut f32, pg: Page, on: Option<Color32>, me: &mut Self| {
+            let active = me.page == pg;
+            let w = wbtn(ui, pg, active);
+            let rr = Rect::from_min_size(pos2(*x, bar.center().y - 14.0), vec2(w, 28.0));
             let resp = ui.interact(rr, ui.id().with(pg.id()), Sense::click());
             let p = ui.painter();
-            if active { p.rect_filled(rr, CornerRadius::same(14), fade(Color32::from_white_alpha(26), alpha)); }
-            else if resp.hovered() { p.rect_filled(rr, CornerRadius::same(14), fade(Color32::from_white_alpha(12), alpha)); }
-            let col = if active { Color32::WHITE } else if resp.hovered() { Color32::from_white_alpha(200) } else { Color32::from_white_alpha(102) };
-            if active {
-                p.text(pos2(rr.left() + 15.0, rr.center().y), Align2::CENTER_CENTER, pg.icon(), icon_font(13.0), fade(col, alpha));
-                p.text(pos2(rr.left() + 26.0, rr.center().y), Align2::LEFT_CENTER, pg.label(), bold(10.5), fade(col, alpha));
-            } else {
-                p.text(rr.center(), Align2::CENTER_CENTER, pg.icon(), icon_font(13.0), fade(col, alpha));
-            }
-            if resp.clicked() { self.adding = None; self.set_page(*pg); }
-            x += widths[i] + 2.0;
-        }
+            if active { p.rect_filled(rr, CornerRadius::same(14), fade(Color32::from_white_alpha(38), alpha)); }
+            let icon = if pg == Page::Lock && me.settings.locked { ic::LOCK } else { pg.icon() };
+            let col = if active { Color32::WHITE } else if let Some(c) = on { c } else if resp.hovered() { Color32::from_white_alpha(170) } else { Color32::from_white_alpha(102) };
+            p.text(pos2(rr.left() + 14.5, rr.center().y), Align2::CENTER_CENTER, icon, icon_font(13.0), fade(col, alpha));
+            if active { p.text(pos2(rr.left() + 27.0, rr.center().y), Align2::LEFT_CENTER, pg.label(), bold(10.5), fade(Color32::WHITE, alpha)); }
+            if resp.clicked() { me.adding = None; if matches!(pg, Page::Sleep | Page::Lock) { me.page = pg; } else { me.set_page(pg); } }
+            *x += w + 2.0;
+        };
+        for pg in pages { btn(ui, &mut x, pg, None, self); }
+        ui.painter().line_segment([pos2(x + 3.5, bar.center().y - 8.0), pos2(x + 3.5, bar.center().y + 8.0)], Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)));
+        x += 9.0;
+        for (pg, on, c) in util { btn(ui, &mut x, pg, if on { Some(c) } else { None }, self); }
+        // engrenagem
+        let g = Rect::from_min_size(pos2(x, bar.center().y - 14.0), vec2(28.0, 28.0));
+        let resp = ui.interact(g, ui.id().with("gear"), Sense::click());
+        ui.painter().text(g.center(), Align2::CENTER_CENTER, ic::SETTINGS, icon_font(13.0), fade(Color32::from_white_alpha(if resp.hovered() { 204 } else { 102 }), alpha));
+        if resp.clicked() { self.view = View::Sheet; self.sheet_scroll = 0.0; self.hooks_on = claude::hooks_state().0; }
         // "+" : nova tarefa
         let plus = Rect::from_center_size(pos2(bar.left() + 14.0, bar.center().y), vec2(28.0, 28.0));
         let r1 = ui.interact(plus, ui.id().with("plus"), Sense::click());
@@ -429,13 +449,88 @@ impl KonApp {
         p.circle_filled(plus.center(), 14.0, fade(Color32::from_white_alpha(if r1.hovered() { 30 } else { 16 }), alpha));
         p.text(plus.center(), Align2::CENTER_CENTER, ic::PLUS, icon_font(14.0), fade(Color32::from_white_alpha(180), alpha));
         if r1.clicked() { self.set_page(Page::Todo); self.adding = Some(String::new()); }
-        // engrenagem
-        let g = Rect::from_center_size(pos2(bar.right() - 14.0, bar.center().y), vec2(28.0, 28.0));
-        let resp = ui.interact(g, ui.id().with("gear"), Sense::click());
-        let p = ui.painter();
-        if resp.hovered() || self.page == Page::Settings { p.circle_filled(g.center(), 14.0, fade(Color32::from_white_alpha(20), alpha)); }
-        p.text(g.center(), Align2::CENTER_CENTER, ic::SETTINGS, icon_font(13.0), fade(Color32::from_white_alpha(if resp.hovered() { 204 } else { 102 }), alpha));
-        if resp.clicked() { self.view = View::Sheet; self.sheet_scroll = 0.0; self.hooks_on = claude::hooks_state().0; }
+        // bolinha de status
+        let playing = self.media.snapshot().playing;
+        let timer = self.focus.running_until.is_some();
+        let pulse = if playing || timer { 0.7 + 0.3 * (ui.input(|i| i.time) as f32 * 4.5).cos() } else { 1.0 };
+        let dc = if playing { Color32::from_rgb(52, 211, 153) } else if timer { Color32::from_rgb(192, 132, 252) } else { Color32::from_white_alpha(64) };
+        p.circle_filled(pos2(bar.right() - 6.0, bar.center().y), 3.0, fade(dc, alpha * pulse));
+    }
+
+    fn page_sleep(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let p = ui.painter().clone();
+        let gap = 10.0;
+        let lw = (body.width() - gap) * 1.0 / 2.25;
+        let l = Rect::from_min_size(body.min, vec2(lw, body.height()));
+        let r = Rect::from_min_max(pos2(l.right() + gap, body.top()), body.max);
+        let dnd = self.settings.dnd;
+        gradient_rr(&p, l, 16.0, Color32::from_rgb(30, 27, 75), Color32::from_rgb(10, 10, 10), alpha);
+        p.rect_stroke(l, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)), egui::StrokeKind::Inside);
+        let mc = pos2(l.left() + 30.0, l.top() + 30.0);
+        p.circle_filled(mc, 18.0, fade(if dnd { Color32::from_rgba_unmultiplied(129, 140, 248, 230) } else { Color32::from_white_alpha(20) }, alpha));
+        p.text(mc, Align2::CENTER_CENTER, ic::MOON, icon_font(17.0), fade(Color32::WHITE, alpha));
+        let tg = toggle_c(ui, &p, pos2(l.right() - 32.0, l.top() + 30.0), dnd, alpha, Color32::from_rgb(99, 102, 241));
+        p.text(pos2(l.left() + 12.0, l.bottom() - 40.0), Align2::LEFT_CENTER, "Não incomodar", bold(16.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(l.left() + 12.0, l.bottom() - 20.0), Align2::LEFT_CENTER, if dnd { "Ligado — avisos do notch em silêncio" } else { "Desligado — o notch pode mostrar avisos" }, FontId::proportional(12.0), fade(Color32::from_white_alpha(128), alpha));
+        if tg.clicked() { self.settings.dnd = !dnd; self.settings.save(); }
+        // timer para dormir
+        p.rect_filled(r, CornerRadius::same(16), fade(Color32::from_white_alpha(8), alpha));
+        p.rect_stroke(r, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)), egui::StrokeKind::Inside);
+        p.text(pos2(r.left() + 12.0, r.top() + 20.0), Align2::LEFT_CENTER, "TIMER PARA DORMIR", bold(10.0), fade(Color32::from_rgba_unmultiplied(199, 210, 254, 178), alpha));
+        p.text(pos2(r.right() - 12.0, r.top() + 20.0), Align2::RIGHT_CENTER, "Pausa a música", FontId::proportional(11.0), fade(Color32::from_white_alpha(102), alpha));
+        let left = self.sleep_until.map(|t| t.saturating_duration_since(Instant::now()).as_secs_f32());
+        match left {
+            None => { p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, "Desligado", FontId::monospace(30.0), fade(Color32::from_white_alpha(90), alpha)); }
+            Some(s) => { p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, mmss(s), FontId::monospace(30.0), fade(Color32::WHITE, alpha)); ui.ctx().request_repaint_after(Duration::from_millis(500)); }
+        }
+        let opts: [Option<u64>; 5] = [None, Some(15), Some(30), Some(45), Some(60)];
+        let bw = (r.width() - 24.0 - 4.0 * 6.0) / 5.0;
+        let lm = left.map(|s| (s / 60.0).ceil() as u64);
+        for (i, o) in opts.iter().enumerate() {
+            let br = Rect::from_min_size(pos2(r.left() + 12.0 + i as f32 * (bw + 6.0), r.bottom() - 40.0), vec2(bw, 28.0));
+            let active = match (o, lm) { (None, None) => true, (Some(m), Some(l)) => l <= *m && l + 15 > *m, _ => false };
+            let lbl = o.map_or("Não".to_string(), |m| format!("{m} min"));
+            let resp = ui.interact(br, ui.id().with(("slp", i)), Sense::click());
+            p.rect_filled(br, CornerRadius::same(14), fade(if active { Color32::WHITE } else { Color32::from_white_alpha(if resp.hovered() { 38 } else { 25 }) }, alpha));
+            p.text(br.center(), Align2::CENTER_CENTER, lbl, FontId::proportional(11.5), fade(if active { Color32::BLACK } else { Color32::from_white_alpha(204) }, alpha));
+            if resp.clicked() { self.sleep_until = o.map(|m| Instant::now() + Duration::from_secs(m * 60)); }
+        }
+    }
+
+    fn page_lock(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let p = ui.painter().clone();
+        let gap = 10.0;
+        let hw = (body.width() - gap) / 2.0;
+        let l = Rect::from_min_size(body.min, vec2(hw, body.height()));
+        let r = Rect::from_min_max(pos2(l.right() + gap, body.top()), body.max);
+        let locked = self.settings.locked; let privacy = self.settings.privacy;
+        // travar
+        if locked { gradient_rr(&p, l, 16.0, Color32::from_rgb(70, 40, 10), Color32::from_rgb(10, 10, 10), alpha); }
+        else { gradient_rr(&p, l, 16.0, Color32::from_rgb(25, 25, 25), Color32::from_rgb(10, 10, 10), alpha); }
+        p.rect_stroke(l, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)), egui::StrokeKind::Inside);
+        let c = pos2(l.left() + 30.0, l.top() + 30.0);
+        p.circle_filled(c, 18.0, fade(if locked { Color32::from_rgb(251, 191, 36) } else { Color32::from_white_alpha(20) }, alpha));
+        p.text(c, Align2::CENTER_CENTER, if locked { ic::LOCK } else { ic::LOCK_OPEN }, icon_font(16.0), fade(if locked { Color32::BLACK } else { Color32::WHITE }, alpha));
+        let t1 = toggle_c(ui, &p, pos2(l.right() - 32.0, l.top() + 30.0), locked, alpha, Color32::from_rgb(245, 158, 11)).clicked();
+        p.text(pos2(l.left() + 12.0, l.bottom() - 46.0), Align2::LEFT_CENTER, if locked { "Ilha travada" } else { "Travar a ilha" }, bold(16.0), fade(Color32::WHITE, alpha));
+        let sub = if locked { "Passar o mouse não abre. Clique na ilha ou use o ícone perto do relógio." } else { "O painel não abre ao passar o mouse" };
+        let mut job = egui::text::LayoutJob::single_section(sub.into(), egui::TextFormat { font_id: FontId::proportional(12.0), color: fade(Color32::from_white_alpha(128), alpha), ..Default::default() });
+        job.wrap.max_width = l.width() - 24.0;
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        p.galley(pos2(l.left() + 12.0, l.bottom() - 34.0), g, Color32::WHITE);
+        let card_click = ui.interact(l, ui.id().with("lockcard"), Sense::click()).clicked();
+        if t1 || card_click { self.settings.locked = !locked; self.settings.save(); }
+        // privacidade
+        p.rect_filled(r, CornerRadius::same(16), fade(Color32::from_white_alpha(8), alpha));
+        p.rect_stroke(r, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)), egui::StrokeKind::Inside);
+        let c = pos2(r.left() + 30.0, r.top() + 30.0);
+        p.circle_filled(c, 18.0, fade(if privacy { Color32::from_rgb(56, 189, 248) } else { Color32::from_white_alpha(20) }, alpha));
+        p.text(c, Align2::CENTER_CENTER, ic::EYE_OFF, icon_font(16.0), fade(if privacy { Color32::BLACK } else { Color32::WHITE }, alpha));
+        let t2 = toggle_c(ui, &p, pos2(r.right() - 32.0, r.top() + 30.0), privacy, alpha, Color32::from_rgb(14, 165, 233)).clicked();
+        p.text(pos2(r.left() + 12.0, r.bottom() - 46.0), Align2::LEFT_CENTER, "Modo privacidade", bold(16.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(r.left() + 12.0, r.bottom() - 26.0), Align2::LEFT_CENTER, "Esconde letras e código dos avisos do notch", FontId::proportional(12.0), fade(Color32::from_white_alpha(128), alpha));
+        let card2 = ui.interact(r, ui.id().with("privcard"), Sense::click()).clicked();
+        if t2 || card2 { self.settings.privacy = !privacy; self.settings.save(); }
     }
 
     /// Capa do álbum: decodifica uma vez por faixa e guarda como textura da placa de vídeo.
@@ -485,6 +580,7 @@ impl KonApp {
         let deny_r = Rect::from_min_size(pos2(ok_r.left() - 6.0 - bw_deny, r.center().y - 13.0), vec2(bw_deny, 26.0));
         let maxw = deny_r.left() - 12.0 - x;
         p.text(pos2(x, r.center().y - 22.0), Align2::LEFT_CENTER, ellipsize_w(ui, &title, 13.5, maxw), bold(13.5), fade(Color32::WHITE, alpha));
+        let sub = if self.settings.privacy { mask(&sub) } else { sub };
         p.text(pos2(x, r.center().y - 3.0), Align2::LEFT_CENTER, ellipsize_chars(&sub, (maxw / 6.7) as usize), FontId::monospace(11.0), fade(Color32::from_white_alpha(140), alpha));
         let mut lx = x; let ly = r.center().y + 17.0;
         let small = FontId::proportional(10.5);
@@ -587,6 +683,10 @@ impl KonApp {
         };
         row(dr.top() + 28.0, Color32::from_rgba_unmultiplied(239, 68, 68, 38), "-", Color32::from_rgba_unmultiplied(252, 165, 165, 128), &l.removed, Color32::from_rgba_unmultiplied(254, 202, 202, 230));
         row(dr.top() + 48.0, Color32::from_rgba_unmultiplied(16, 185, 129, 38), "+", Color32::from_rgba_unmultiplied(110, 231, 183, 128), &l.added, fade(Color32::from_rgb(167, 243, 208), if l.added.is_empty() { 0.35 } else { 1.0 }));
+        if self.settings.privacy {
+            p.rect_filled(dr.shrink(1.0), CornerRadius::same(11), fade(Color32::from_rgb(12, 12, 12), alpha));
+            p.text(dr.center(), Align2::CENTER_CENTER, "Oculto pelo modo privacidade", FontId::proportional(11.0), fade(Color32::from_white_alpha(153), alpha));
+        }
         let stage_idx: i32 = if done { 4 } else if running { l.stage as i32 } else { -1 };
         let gw = (dr.width() - 3.0 * 6.0) / 4.0;
         let col = if done { Color32::from_rgb(244, 114, 182) } else { Color32::from_rgb(251, 146, 60) };
@@ -749,6 +849,12 @@ impl KonApp {
         if area.contains(pos2(rr.right() - 30.0, rr.center().y)) && seg(ui, &pc, pos2(rr.right() - 8.0, rr.center().y), &opts, &mut om, alpha, "open") { self.settings.open_mode = om; self.settings.save(); }
         y += 42.0;
         let rr = row_bg(y, 36.0);
+        pc.text(pos2(rr.left() + 12.0, rr.center().y), Align2::LEFT_CENTER, "Tela (com 2 monitores ou mais)", bold(11.5), dim(255));
+        let mut disp = self.settings.display.clone();
+        let opts: [(&str, String); 2] = [("Principal", "primary".into()), ("Do mouse", "cursor".into())];
+        if area.contains(pos2(rr.right() - 30.0, rr.center().y)) && seg(ui, &pc, pos2(rr.right() - 8.0, rr.center().y), &opts, &mut disp, alpha, "disp") { self.settings.display = disp; self.settings.save(); }
+        y += 42.0;
+        let rr = row_bg(y, 36.0);
         pc.text(pos2(rr.left() + 12.0, rr.center().y), Align2::LEFT_CENTER, "Histórico da área de transferência", bold(11.5), dim(255));
         let on = self.clips.lock().unwrap().on;
         if area.contains(pos2(rr.right() - 30.0, rr.center().y)) && toggle_c(ui, &pc, pos2(rr.right() - 30.0, rr.center().y), on, alpha, Color32::from_rgb(20, 184, 166)).clicked() {
@@ -888,7 +994,8 @@ impl KonApp {
             if c.pinned { pc.text(pos2(x, r.center().y), Align2::LEFT_CENTER, ic::PIN, icon_font(11.0), fade(Color32::from_rgb(94, 234, 212), alpha)); x += 18.0; }
             let hm = chrono::DateTime::from_timestamp_millis(c.at).map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
             let right_pad = if resp.hovered() { 100.0 } else { 46.0 };
-            let mut job = egui::text::LayoutJob::single_section(c.text.replace(['\r', '\t'], " "), egui::TextFormat { font_id: FontId::proportional(12.5), color: fade(Color32::WHITE, alpha), line_height: Some(17.0), ..Default::default() });
+            let shown = if self.settings.privacy { mask(&c.text) } else { c.text.clone() };
+            let mut job = egui::text::LayoutJob::single_section(shown.replace(['\r', '\t'], " "), egui::TextFormat { font_id: FontId::proportional(12.5), color: fade(Color32::WHITE, alpha), line_height: Some(17.0), ..Default::default() });
             job.wrap = egui::text::TextWrapping { max_width: r.right() - right_pad - x, max_rows: 2, break_anywhere: true, overflow_character: Some('…') };
             let g = ui.fonts_mut(|f| f.layout_job(job));
             pc.galley(pos2(x, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
@@ -1410,6 +1517,8 @@ fn ellipsize_w(ui: &egui::Ui, s: &str, size: f32, max: f32) -> String {
     while lo < hi { let mid = (lo + hi + 1) / 2; let t: String = ch[..mid].iter().collect::<String>() + "…"; if text_w(ui, &t, size) <= max { lo = mid } else { hi = mid - 1 } }
     ch[..lo].iter().collect::<String>() + "…"
 }
+/// Modo privacidade: troca letras e números por pontos, mantendo espaços (dá para ver o tamanho, não o conteúdo).
+fn mask(s: &str) -> String { s.chars().map(|c| if c.is_whitespace() { ' ' } else { '•' }).collect() }
 fn ellipsize_chars(s: &str, n: usize) -> String {
     let n = n.max(2);
     if s.chars().count() <= n { s.to_string() } else { s.chars().take(n - 1).collect::<String>() + "…" }
@@ -1595,12 +1704,20 @@ fn install_fonts(ctx: &egui::Context) {
 
 /// Vigia o cursor do sistema a cada 30 ms e só pede um quadro quando ele entra ou sai do notch.
 fn spawn_cursor_watch(ctx: egui::Context, hit: Arc<Mutex<Hit>>) {
+    let mut tick: u32 = 0;
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(30));
         let Some((x, y)) = crate::platform::cursor_in_window() else { continue };
         let mut h = hit.lock().unwrap();
         let ppp = if h.ppp > 0.0 { h.ppp } else { 1.0 };
         let inside = h.rect.map_or(false, |r| r.contains(pos2(x as f32 / ppp, y as f32 / ppp)));
+        // a cada ~0,5 s, com a ilha fechada: mantém centralizada no monitor certo (troca de tela, de resolução ou de escala)
+        tick += 1;
+        if tick % 16 == 0 && h.compact && !inside && h.rect.is_some() {
+            let follow = h.follow; drop(h);
+            if crate::platform::place(follow) { ctx.request_repaint(); }
+            continue;
+        }
         if inside != h.inside { h.inside = inside; drop(h); ctx.request_repaint(); }
     });
 }

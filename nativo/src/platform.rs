@@ -42,6 +42,28 @@ mod imp {
         PxRect { x: 0, y: 0, w: 1920, h: 1080 }
     }
 
+    /// Centraliza o Kon no topo do monitor escolhido: o principal ou o que está com o mouse.
+    /// Tudo em pixels físicos (cada monitor pode ter uma escala diferente). Devolve true se moveu.
+    pub fn place(follow_cursor: bool) -> bool {
+        let Some(h) = hwnd() else { return false };
+        unsafe {
+            let mut pt = POINT::default();
+            if follow_cursor { let _ = GetCursorPos(&mut pt); }
+            let m = MonitorFromPoint(pt, if follow_cursor { windows::Win32::Graphics::Gdi::MONITOR_DEFAULTTONEAREST } else { MONITOR_DEFAULTTOPRIMARY });
+            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            if !GetMonitorInfoW(m, &mut mi).as_bool() { return false; }
+            let mut r = RECT::default();
+            if GetWindowRect(h, &mut r).is_err() { return false; }
+            let mr = mi.rcMonitor;
+            let w = r.right - r.left;
+            let x = mr.left + ((mr.right - mr.left) - w) / 2;
+            let y = mr.top;
+            if (r.left - x).abs() <= 1 && r.top == y { return false; }
+            let _ = SetWindowPos(h, Some(HWND_TOPMOST), x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+            true
+        }
+    }
+
     /// Esconde o Kon da barra de tarefas e do Alt+Tab, e o mantém acima de tudo.
     pub fn make_tool_window() {
         if let Some(h) = hwnd() {
@@ -77,6 +99,7 @@ mod imp {
     pub fn cursor_in_window() -> Option<(i32, i32)> { None }
     pub fn primary_work_area() -> PxRect { PxRect { x: 0, y: 0, w: 1920, h: 1080 } }
     pub fn make_tool_window() {}
+    pub fn place(_follow_cursor: bool) -> bool { false }
     pub fn set_focusable(_on: bool) {}
     pub fn data_dir() -> std::path::PathBuf { std::env::temp_dir().join("kon-nativo") }
 }
