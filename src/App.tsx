@@ -8,6 +8,7 @@ import {
   FolderOpen, File as FileIcon, FileText, FileImage, FileVideo, FileAudio, FileArchive, FileCode, Folder,
   Mic, Square, Globe, MapPin, Download, Bell, AlertTriangle,
   Camera, Pin, PinOff, Zap, HardDrive, MemoryStick, AppWindow, Link2, TerminalSquare, ClipboardList, Archive, Sparkles, Video, CalendarClock, RefreshCw, Paperclip, Terminal, ShieldCheck, Monitor, MousePointerClick,
+  MessageSquareQuote,
   Sun, Cloud, CloudSun, CloudMoon, CloudFog, CloudDrizzle, CloudRain, CloudSnow, CloudLightning, Droplets, Wind, Thermometer,
 } from "lucide-react";
 import {
@@ -132,6 +133,7 @@ export default function KonIsland() {
   const [hover, setHover] = useState(false);
   const [tab, setTab] = usePersist("tab.v2", "home");
   const [pageOrder, setPageOrder] = usePersist("pages.v2", DEFAULT_ORDER);
+  const [lyricsOn, setLyricsOn] = usePersist("music.lyrics", true); // player de música: com letra ao lado ou só o player
   const [pageOn, setPageOn] = usePersist("pagesOn.v2", Object.fromEntries(DEFAULT_ORDER.map((k) => [k, true])));
   const [sheetTab, setSheetTab] = useState("pages");
   const [settings, setSettings] = useState({ provider: "gemini", geminiModel: "gemini-flash-latest", claudeModel: "claude-haiku-5-5", webSearch: true, autoStart: false, devDock: !bridge.desktop, hasGeminiKey: false, hasAnthropicKey: false,
@@ -1236,7 +1238,8 @@ export default function KonIsland() {
     <div className="relative h-full flex items-center gap-5 px-1">
       <div className="pointer-events-none absolute -left-10 -top-10 w-56 h-56 rounded-full bg-pink-500/25 blur-3xl transition-colors duration-700" style={artColor ? { background: artColor, opacity: 0.35 } : undefined} />
       <div className="pointer-events-none absolute right-0 -bottom-16 w-64 h-48 rounded-full bg-indigo-600/25 blur-3xl" />
-      <motion.div className="relative w-[132px] h-[132px] rounded-2xl overflow-hidden shrink-0 shadow-[0_12px_30px_rgba(214,58,134,0.35)]" animate={{ scale: playing ? 1 : 0.9 }} transition={SPRING}>
+      <motion.div className="relative rounded-2xl overflow-hidden shrink-0 shadow-[0_12px_30px_rgba(214,58,134,0.35)]" initial={false}
+        animate={{ scale: playing ? 1 : 0.9, width: lyricsOn && !mixOpen ? 104 : 132, height: lyricsOn && !mixOpen ? 104 : 132 }} transition={SPRING}>
         {cover("mus")}
       </motion.div>
       <button onClick={() => setMixOpen((v) => !v)} title="Saída de áudio e volume por app"
@@ -1269,34 +1272,71 @@ export default function KonIsland() {
           </div>
         </div>
       ) : (
-      <div className="relative flex-1 min-w-0 flex flex-col">
-        <div className="text-[12px] text-white/60 truncate pr-16">{trackTitle} — {trackArtist}</div>
-        <div className="relative h-[52px] overflow-hidden mt-1.5" style={{ maskImage: "linear-gradient(black 70%, transparent)" }}>
-          <motion.div animate={{ y: -li * 26 }} transition={SPRING}>
-            {(privacy ? [{ t: 0, text: "Lyrics hidden" }] : lyricsView).map((l, i) => (
-              <motion.div key={i} className="h-[26px] leading-[26px] text-[17px] font-semibold tracking-tight truncate cursor-pointer"
-                animate={{ color: i === li ? "rgba(255,247,222,1)" : i === li + 1 ? "rgba(255,255,255,.3)" : "rgba(255,255,255,.12)",
-                  textShadow: i === li ? "0 0 14px rgba(255,214,140,.55)" : "0 0 0 rgba(0,0,0,0)" }}
-                transition={{ duration: 0.5 }} onClick={() => setPos(l.t)}>{l.text || "\u00a0"}</motion.div>
-            ))}
-          </motion.div>
-        </div>
-        <div className="mt-2.5">
-          <div className="h-1 rounded-full bg-white/20 cursor-pointer" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPos(Math.round(((e.clientX - r.left) / r.width) * duration)); }}>
-            <motion.div className="h-full rounded-full bg-white" initial={false} animate={{ width: `${duration ? (pos / duration) * 100 : 0}%` }} transition={{ duration: 0.9, ease: "linear" }} />
+      (() => {
+        const progress = (
+          <div>
+            <div className="h-1 rounded-full bg-white/20 cursor-pointer" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setPos(Math.round(((e.clientX - r.left) / r.width) * duration)); }}>
+              <motion.div className="h-full rounded-full bg-white" initial={false} animate={{ width: `${duration ? (pos / duration) * 100 : 0}%` }} transition={{ duration: 0.9, ease: "linear" }} />
+            </div>
+            <div className="flex justify-between mt-1 font-mono tabular-nums text-[10.5px] text-white/45"><span>{fmt(pos)}</span><span>-{fmt(Math.max(0, duration - pos))}</span></div>
           </div>
-          <div className="flex justify-between mt-1 font-mono tabular-nums text-[10.5px] text-white/45"><span>{fmt(pos)}</span><span>-{fmt(Math.max(0, duration - pos))}</span></div>
-        </div>
-        <div className="flex items-center justify-center gap-6 mt-1">
-          <button onClick={() => setShuffle((s) => !s)} className={shuffle ? "text-white" : "text-white/40 hover:text-white/70"}><Shuffle size={15} /></button>
-          <motion.button whileTap={{ scale: 0.85 }} onClick={prevTrack} className="text-white"><SkipBack size={18} fill="currentColor" /></motion.button>
-          <motion.button whileTap={{ scale: 0.88 }} onClick={togglePlay} className="w-9 h-9 rounded-full bg-white text-black grid place-items-center">
-            {playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" className="ml-0.5" />}
+        );
+        const lyricsBtn = (
+          <motion.button whileTap={{ scale: 0.85 }} onClick={() => setLyricsOn((v) => !v)} title={lyricsOn ? "Esconder a letra" : "Mostrar a letra"}
+            className={`w-7 h-7 -ml-1 grid place-items-center rounded-full transition-colors ${lyricsOn ? "bg-white/15 text-white" : "text-white/45 hover:text-white/80"}`}>
+            <MessageSquareQuote size={14} />
           </motion.button>
-          <motion.button whileTap={{ scale: 0.85 }} onClick={nextTrack} className="text-white"><SkipForward size={18} fill="currentColor" /></motion.button>
-          <button onClick={() => setRepeat((s) => !s)} className={repeat ? "text-white" : "text-white/40 hover:text-white/70"}><Repeat size={15} /></button>
-        </div>
-      </div>
+        );
+        const controls = (small) => (
+          <div className="flex items-center justify-between mt-1">
+            {lyricsBtn}
+            <div className={`flex items-center ${small ? "gap-4" : "gap-6"}`}>
+              {!small && <button onClick={() => setShuffle((s) => !s)} className={shuffle ? "text-white" : "text-white/40 hover:text-white/70"}><Shuffle size={15} /></button>}
+              <motion.button whileTap={{ scale: 0.85 }} onClick={prevTrack} className="text-white"><SkipBack size={small ? 16 : 18} fill="currentColor" /></motion.button>
+              <motion.button whileTap={{ scale: 0.88 }} onClick={togglePlay} className={`${small ? "w-8 h-8" : "w-9 h-9"} rounded-full bg-white text-black grid place-items-center`}>
+                {playing ? <Pause size={small ? 14 : 16} fill="currentColor" /> : <Play size={small ? 14 : 16} fill="currentColor" className="ml-0.5" />}
+              </motion.button>
+              <motion.button whileTap={{ scale: 0.85 }} onClick={nextTrack} className="text-white"><SkipForward size={small ? 16 : 18} fill="currentColor" /></motion.button>
+              {!small && <button onClick={() => setRepeat((s) => !s)} className={repeat ? "text-white" : "text-white/40 hover:text-white/70"}><Repeat size={15} /></button>}
+            </div>
+            <span className={small ? "w-0" : "w-7"} />
+          </div>
+        );
+        const lines = privacy ? [{ t: 0, text: "Letra oculta (modo privacidade)" }] : lyricsView;
+        if (!lyricsOn) {
+          // só o player: título grande, progresso e controles completos
+          return (
+            <motion.div key="player" {...FADE} className="relative flex-1 min-w-0 flex flex-col justify-center pr-1">
+              <div className="text-[19px] font-semibold tracking-tight truncate pr-16 leading-tight">{trackTitle || "Nada tocando"}</div>
+              <div className="text-[12.5px] text-white/55 truncate mt-0.5">{trackArtist || "\u00a0"}</div>
+              <div className="mt-4">{progress}</div>
+              <div className="mt-1.5">{controls(false)}</div>
+            </motion.div>
+          );
+        }
+        // com letra: controles compactos à esquerda, letra rolando à direita (linha atual em destaque)
+        return (
+          <motion.div key="lyrics" {...FADE} className="relative flex-1 min-w-0 h-[132px] flex items-stretch gap-4">
+            <div className="w-[176px] shrink-0 flex flex-col justify-center">
+              <div className="text-[14px] font-semibold tracking-tight truncate leading-tight">{trackTitle || "Nada tocando"}</div>
+              <div className="text-[11.5px] text-white/55 truncate mt-0.5">{trackArtist || "\u00a0"}</div>
+              <div className="mt-3">{progress}</div>
+              {controls(true)}
+            </div>
+            <div className="relative flex-1 min-w-0 h-full border-l border-white/10 pl-4 mt-3 overflow-hidden" style={{ maskImage: "linear-gradient(transparent, black 24%, black 76%, transparent)" }}>
+              <motion.div animate={{ y: 36 - li * 30 }} transition={SPRING}>
+                {lines.map((l, i) => (
+                  <motion.div key={i} className="h-[30px] flex items-center text-[15px] font-semibold tracking-tight cursor-pointer origin-left"
+                    animate={{ color: i === li ? "rgba(255,255,255,1)" : Math.abs(i - li) === 1 ? "rgba(255,255,255,.38)" : "rgba(255,255,255,.14)" }}
+                    transition={{ duration: 0.45 }} onClick={() => setPos(l.t)}>
+                    <span className="truncate">{l.text || "\u00a0"}</span>
+                  </motion.div>
+                ))}
+              </motion.div>
+            </div>
+          </motion.div>
+        );
+      })()
       )}
     </div>
   );
