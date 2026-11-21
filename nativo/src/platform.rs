@@ -64,14 +64,104 @@ mod imp {
         }
     }
 
-    /// Manda Ctrl+<tecla> para o programa em primeiro plano (o Kon não pega o foco).
-    /// Solta antes o Alt (você ainda está segurando Ctrl+Alt+R), senão viraria Ctrl+Alt+C.
+    /// Manda Ctrl+<tecla> para o programa em primeiro plano (o Kon não pega o foco). Como o Kon atual: espera você
+    /// soltar Ctrl/Alt/Shift/Win (até 1,2 s), solta o que ainda estiver preso e então manda Ctrl+tecla.
     pub fn send_ctrl(key: u8) {
         use windows::Win32::UI::Input::KeyboardAndMouse::*;
+        let down = |vk: VIRTUAL_KEY| unsafe { (GetAsyncKeyState(vk.0 as i32) as u16 & 0x8000) != 0 };
+        let mut waited = 0;
+        while waited < 1200 && [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN].iter().any(|k| down(*k)) { std::thread::sleep(std::time::Duration::from_millis(15)); waited += 15; }
         let k = |vk: VIRTUAL_KEY, up: bool| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 } } };
-        let c = VIRTUAL_KEY(key as u16);
-        let seq = [k(VK_MENU, true), k(VK_LMENU, true), k(VK_RMENU, true), k(VK_SHIFT, true), k(VK_CONTROL, false), k(c, false), k(c, true), k(VK_CONTROL, true)];
-        unsafe { SendInput(&seq, std::mem::size_of::<INPUT>() as i32); }
+        let mut rel = vec![];
+        for vk in [VK_MENU, VK_SHIFT, VK_LWIN] { if down(vk) { rel.push(k(vk, true)); } }
+        unsafe {
+            if !rel.is_empty() { SendInput(&rel, std::mem::size_of::<INPUT>() as i32); }
+            let c = VIRTUAL_KEY(key as u16);
+            SendInput(&[k(VK_CONTROL, false), k(c, false)], std::mem::size_of::<INPUT>() as i32);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            SendInput(&[k(c, true), k(VK_CONTROL, true)], std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    /// "Não incomodar" do Windows (Assistente de foco) pelo mesmo estado WNF que o Kon atual usa.
+    /// 0 = desligado, 1 = só prioridade, 2 = só alarmes. Devolve o modo anterior.
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn ZwUpdateWnfStateData(name: *const u64, buf: *const u8, len: u32, ty: *const u8, scope: *const u8, matchd: u32, check: u32) -> i32;
+        fn ZwQueryWnfStateData(name: *const u64, ty: *const u8, scope: *const u8, stamp: *mut u32, buf: *mut u8, size: *mut u32) -> i32;
+    }
+    const QUIET: u64 = 0x0D83063EA3BF1C75;
+    pub fn dnd_get() -> i32 {
+        let mut b = [0u8; 4]; let mut size = 4u32; let mut stamp = 0u32;
+        let r = unsafe { ZwQueryWnfStateData(&QUIET, std::ptr::null(), std::ptr::null(), &mut stamp, b.as_mut_ptr(), &mut size) };
+        if r == 0 { i32::from_le_bytes(b) } else { -1 }
+    }
+    pub fn dnd_set(mode: i32) -> bool {
+        let b = mode.to_le_bytes();
+        unsafe { ZwUpdateWnfStateData(&QUIET, b.as_ptr(), 4, std::ptr::null(), std::ptr::null(), 0, 0) == 0 }
+    }
+
+    /// Fora de prints, gravações e compartilhamento de tela (Teams, Meet, Discord...).
+    pub fn exclude_from_capture(on: bool) {
+        if let Some(h) = hwnd() { unsafe { let _ = SetWindowDisplayAffinity(h, if on { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE }); } }
+    }
+
+    /// O que está na frente: (tela cheia — jogo, vídeo, apresentação; janela maximizada no monitor do Kon).
+    pub fn foreground_state() -> (bool, bool) {
+        use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE};
+        let full = unsafe { SHQueryUserNotificationState() }.map(|s| s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE).unwrap_or(false);
+        let max = unsafe {
+            let fg = GetForegroundWindow();
+            if fg.0.is_null() || Some(fg) == hwnd() { false } else {
+                let mut cls = [0u16; 64];
+                let n = GetClassNameW(fg, &mut cls);
+                let c = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
+                // a área de trabalho e a barra de tarefas não contam
+                if c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" { false }
+                else if IsZoomed(fg).as_bool() {
+                    // só se a janela maximizada estiver no mesmo monitor do Kon
+                    match hwnd() { Some(k) => { use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST}; MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) == MonitorFromWindow(k, MONITOR_DEFAULTTONEAREST) } None => true }
+                } else { false }
+            }
+        };
+        (full, max)
+    }
+
+    /// Esconde/mostra a janela do Kon (tela cheia).
+    pub fn set_visible(on: bool) { if let Some(h) = hwnd() { unsafe { let _ = ShowWindow(h, if on { SW_SHOWNOACTIVATE } else { SW_HIDE }); } } }
+
+    /// Iniciar com o Windows (HKCU\...\Run).
+    pub fn set_autostart(on: bool) -> bool {
+        use windows::core::HSTRING;
+        use windows::Win32::System::Registry::*;
+        let path = HSTRING::from("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+        unsafe {
+            let mut hk = HKEY::default();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, &path, None, KEY_SET_VALUE, &mut hk).is_err() { return false; }
+            let r = if on {
+                let exe = std::env::current_exe().map(|p| format!("\"{}\"", p.display())).unwrap_or_default();
+                let w: Vec<u16> = exe.encode_utf16().chain(std::iter::once(0)).collect();
+                let bytes = std::slice::from_raw_parts(w.as_ptr() as *const u8, w.len() * 2);
+                RegSetValueExW(hk, &HSTRING::from("KonNativo"), None, REG_SZ, Some(bytes)).is_ok()
+            } else { let _ = RegDeleteValueW(hk, &HSTRING::from("KonNativo")); true };
+            let _ = RegCloseKey(hk);
+            r
+        }
+    }
+
+    /// Volume do Windows (0–100) e mudo, pelo dispositivo de saída padrão.
+    pub fn master_volume() -> Option<(u32, bool)> {
+        use windows::Win32::Media::Audio::{eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator, Endpoints::IAudioEndpointVolume};
+        use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let en: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+            let dev = en.GetDefaultAudioEndpoint(eRender, eConsole).ok()?;
+            let vol: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).ok()?;
+            let l = vol.GetMasterVolumeLevelScalar().ok()?;
+            let m = vol.GetMute().ok()?.as_bool();
+            Some(((l * 100.0).round() as u32, m))
+        }
     }
 
     /// Esconde o Kon da barra de tarefas e do Alt+Tab, e o mantém acima de tudo.
@@ -111,6 +201,13 @@ mod imp {
     pub fn make_tool_window() {}
     pub fn place(_follow_cursor: bool) -> bool { false }
     pub fn send_ctrl(_key: u8) {}
+    pub fn dnd_get() -> i32 { -1 }
+    pub fn dnd_set(_m: i32) -> bool { false }
+    pub fn exclude_from_capture(_on: bool) {}
+    pub fn foreground_state() -> (bool, bool) { (false, std::env::var("KON_MAX").is_ok()) }
+    pub fn set_visible(_on: bool) {}
+    pub fn set_autostart(_on: bool) -> bool { false }
+    pub fn master_volume() -> Option<(u32, bool)> { None }
     pub fn set_focusable(_on: bool) {}
     pub fn data_dir() -> std::path::PathBuf { std::env::temp_dir().join("kon-nativo") }
 }

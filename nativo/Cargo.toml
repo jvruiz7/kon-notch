@@ -9,6 +9,7 @@ eframe = { version = "0.33", default-features = false, features = ["glow", "defa
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
+chrono-tz = { version = "0.10", default-features = false }
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 iana-time-zone = "0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
@@ -17,7 +18,7 @@ regex-lite = "0.1"
 arboard = { version = "3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Media_Control", "Foundation", "Storage_Streams", "Win32_UI_Shell", "Win32_System_Registry", "Win32_Security_Cryptography", "Win32_System_Memory", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Media_Control", "Foundation", "Storage_Streams", "Win32_UI_Shell", "Win32_System_Registry", "Win32_Security_Cryptography", "Win32_System_Memory", "Win32_UI_Input_KeyboardAndMouse", "Win32_Media_Audio", "Win32_Media_Audio_Endpoints", "Win32_System_Com", "Win32_UI_Shell_PropertiesSystem", "Win32_System_Threading"] }
 tray-icon = "0.21"
 rfd = { version = "0.15", default-features = false }
 

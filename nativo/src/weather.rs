@@ -9,6 +9,7 @@ pub struct Hour { pub hour: u32, pub temp: i32, pub code: i32, pub is_day: bool,
 #[derive(Clone, Debug, Default)]
 pub struct Weather {
     pub city: String,
+    pub loc_id: String,
     pub temp: i32, pub feels: i32, pub humidity: i32, pub wind: i32,
     pub code: i32, pub is_day: bool, pub max: i32, pub min: i32, pub rain_max: i32,
     pub sunrise: String, pub sunset: String, pub now_iso: String,
@@ -75,7 +76,7 @@ fn fetch(city: &str, lat: f64, lon: f64) -> Option<Weather> {
         is_day: d["hourly"]["is_day"][i].as_i64() == Some(1), rain: f(&d["hourly"]["precipitation_probability"][i]),
     }).collect();
     Some(Weather {
-        city: city.to_string(),
+        city: city.to_string(), loc_id: String::new(),
         temp: f(&c["temperature_2m"]), feels: f(&c["apparent_temperature"]), humidity: f(&c["relative_humidity_2m"]),
         wind: f(&c["wind_speed_10m"]), code: f(&c["weather_code"]), is_day: c["is_day"].as_i64() == Some(1),
         max: f(&d["daily"]["temperature_2m_max"][0]), min: f(&d["daily"]["temperature_2m_min"][0]),
@@ -85,14 +86,29 @@ fn fetch(city: &str, lat: f64, lon: f64) -> Option<Weather> {
     })
 }
 
-pub fn start(repaint: impl Fn() + Send + 'static) -> Arc<Mutex<Option<Weather>>> {
+/// Cidades fixas (mesma lista do Kon atual), além da localização atual.
+pub const BR_CITIES: [(&str, &str, f64, f64, &str); 6] = [
+    ("porto-velho", "Porto Velho", -8.7612, -63.9004, "America/Porto_Velho"), ("sao-paulo", "São Paulo", -23.5505, -46.6333, "America/Sao_Paulo"),
+    ("brasilia", "Brasília", -15.7939, -47.8828, "America/Sao_Paulo"), ("rio", "Rio de Janeiro", -22.9068, -43.1729, "America/Sao_Paulo"),
+    ("manaus", "Manaus", -3.119, -60.0217, "America/Manaus"), ("curitiba", "Curitiba", -25.4284, -49.2733, "America/Sao_Paulo"),
+];
+
+/// Busca o clima do lugar escolhido (`loc`: "auto" ou o id de uma cidade); troca na hora quando você muda de cidade.
+pub fn start(loc: Arc<Mutex<String>>, repaint: impl Fn() + Send + 'static) -> Arc<Mutex<Option<Weather>>> {
     let st = Arc::new(Mutex::new(None));
     let s2 = st.clone();
     std::thread::spawn(move || {
-        let (city, lat, lon) = locate();
+        let mut auto: Option<(String, f64, f64)> = None;
         loop {
-            if let Some(w) = fetch(&city, lat, lon) { *s2.lock().unwrap() = Some(w); repaint(); std::thread::sleep(Duration::from_secs(15 * 60)); }
-            else { std::thread::sleep(Duration::from_secs(60)); }
+            let id = loc.lock().unwrap().clone();
+            let (city, lat, lon) = match BR_CITIES.iter().find(|c| c.0 == id) {
+                Some(c) => (c.1.to_string(), c.2, c.3),
+                None => auto.get_or_insert_with(locate).clone(),
+            };
+            let ok = if let Some(mut w) = fetch(&city, lat, lon) { w.loc_id = id.clone(); *s2.lock().unwrap() = Some(w); repaint(); true } else { false };
+            // espera 15 min (ou 1 min se falhou), mas acorda na hora se você trocar de cidade
+            let wait = if ok { 900 } else { 60 };
+            for _ in 0..wait { std::thread::sleep(Duration::from_secs(1)); if *loc.lock().unwrap() != id { break; } }
         }
     });
     st

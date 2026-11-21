@@ -7,6 +7,8 @@ mod clipboard;
 mod hotkeys;
 mod icons;
 mod inuse;
+mod mascot;
+mod lyrics;
 mod media;
 mod tasks;
 mod translate;
