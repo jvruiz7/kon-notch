@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scale: ["1"]
+        scale: ["1.25"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,7 +43,7 @@ jobs:
         run: |
           $o = "$env:RUNNER_TEMP\probe"
           Set-Location $o
-          git init -q -b "probe-out-${{ matrix.scale }}"
+          git init -q -b "probe-old-${{ matrix.scale }}"
           git config user.name "kon-probe"; git config user.email "probe@users.noreply.github.com"
           git add -A; git commit -qm "probe ${{ github.sha }}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "probe-out-${{ matrix.scale }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" "probe-old-${{ matrix.scale }}"
