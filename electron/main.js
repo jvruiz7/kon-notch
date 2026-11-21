@@ -497,6 +497,27 @@ let Anthropic = null;
 try { ({ GoogleGenAI } = require("@google/genai")); } catch (e) { console.warn("genai sdk", e.message); }
 try { Anthropic = require("@anthropic-ai/sdk").Anthropic; } catch (e) { console.warn("anthropic sdk", e.message); }
 const GEMINI_FALLBACK = "gemini-flash-latest";
+// O SDK @google/genai 3.x fala com a API "v1" por padrão, e lá os apelidos "-latest" não existem (404).
+// Na "v1beta" (a mesma do AI Studio) eles existem, e a busca do Google também.
+const geminiClient = (key) => new GoogleGenAI({ apiKey: key, apiVersion: "v1beta" });
+// Último recurso: pergunta à API quais modelos Flash a chave pode usar e escolhe o mais novo.
+let discoveredFlash = null;
+async function discoverFlash(ai) {
+  if (discoveredFlash) return discoveredFlash;
+  const names = [];
+  const pager = await ai.models.list({ config: { pageSize: 100 } });
+  for await (const m of pager) {
+    const n = String(m.name || "").replace(/^models\//, "");
+    const acts = m.supportedActions || [];
+    if (/^gemini-[\d.]+-flash(-lite)?$|^gemini-flash(-lite)?-latest$/.test(n) && (!acts.length || acts.includes("generateContent"))) names.push(n);
+  }
+  const ver = (n) => parseFloat((n.match(/gemini-([\d.]+)/) || [])[1] || "0");
+  names.sort((a, b) => (/lite/.test(a) - /lite/.test(b)) || (/latest/.test(b) - /latest/.test(a)) || ver(b) - ver(a));
+  if (!names.length) throw new Error("Nenhum modelo Gemini Flash disponível para esta chave");
+  discoveredFlash = names[0];
+  console.log("gemini: usando", discoveredFlash);
+  return discoveredFlash;
+}
 
 function keys() {
   const s = readSettings();
@@ -505,7 +526,7 @@ function keys() {
 const isGone = (e) => /404|no longer available|not found|is not supported/i.test(String(e?.message || e));
 
 async function geminiStream({ key, model, system, messages, webSearch, signal, onText }) {
-  const ai = new GoogleGenAI({ apiKey: key });
+  const ai = geminiClient(key);
   const contents = messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: m.parts || [{ text: m.text }] }));
   const config = { systemInstruction: system, abortSignal: signal };
   if (webSearch) config.tools = [{ googleSearch: {} }];
@@ -546,9 +567,14 @@ async function runAI({ provider, system, messages, webSearch, signal, onText }) 
   try {
     return { ...(await geminiStream({ key: gemini, model: s.geminiModel, system, messages, webSearch, signal, onText })), model: s.geminiModel };
   } catch (e) {
-    if (!isGone(e) || s.geminiModel === GEMINI_FALLBACK) throw e;
-    const r = await geminiStream({ key: gemini, model: GEMINI_FALLBACK, system, messages, webSearch, signal, onText });
-    return { ...r, model: GEMINI_FALLBACK, fellBack: s.geminiModel };
+    if (!isGone(e)) throw e;
+    // modelo sumiu/indisponível: tenta o apelido do Flash atual e, se nem ele existir, o Flash mais novo que a chave enxerga
+    const tryModel = async (model) => ({ ...(await geminiStream({ key: gemini, model, system, messages, webSearch, signal, onText })), model, fellBack: s.geminiModel });
+    if (s.geminiModel !== GEMINI_FALLBACK) { try { return await tryModel(GEMINI_FALLBACK); } catch (e2) { if (!isGone(e2)) throw e2; } }
+    const found = await discoverFlash(geminiClient(gemini));
+    const r = await tryModel(found);
+    if (r.full) writeSettings({ geminiModel: found }); // guarda o que funcionou
+    return r;
   }
 }
 /* Arquivo anexado de propósito (zona "Perguntar à IA"): só é lido aqui, quando você pede */
@@ -615,14 +641,17 @@ ipcMain.handle("ai:once", async (_e, { provider, system, messages }) => {
 ipcMain.handle("ai:transcribe", async (_e, { base64, mime }) => {
   const { gemini, s } = keys();
   if (!gemini || !GoogleGenAI) return { ok: false, code: "NO_KEY" };
-  const ai = new GoogleGenAI({ apiKey: gemini });
+  const ai = geminiClient(gemini);
   const req = (model) => ai.models.generateContent({
     model,
     contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime || "audio/webm", data: base64 } }, { text: "Transcreva este áudio em português do Brasil. Responda só com a transcrição." }] }],
   });
   try {
     let r;
-    try { r = await req(s.geminiModel); } catch (e) { if (!isGone(e)) throw e; r = await req(GEMINI_FALLBACK); }
+    try { r = await req(s.geminiModel); } catch (e) {
+      if (!isGone(e)) throw e;
+      try { r = await req(GEMINI_FALLBACK); } catch (e2) { if (!isGone(e2)) throw e2; r = await req(await discoverFlash(ai)); }
+    }
     return { ok: true, text: (r.text || "").trim() };
   } catch (e) { return { ok: false, message: String(e.message || e) }; }
 });
