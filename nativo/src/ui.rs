@@ -2,6 +2,11 @@
 
 use crate::media::{Media, MediaCmd, MediaState};
 use crate::settings::Settings;
+#[allow(dead_code)]
+const _ICONS: () = ();
+use crate::icons as ic;
+use crate::tasks::Tasks;
+use crate::weather::{self, Weather};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -20,12 +25,15 @@ const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AG
 enum View { Compact, Panel }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Page { Home, Music, Focus, Settings }
+enum Page { Home, Music, Weather, Focus, Todo, Settings }
 
 impl Page {
-    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Focus => "focus", Page::Settings => "settings" } }
-    fn from(s: &str) -> Page { match s { "music" => Page::Music, "focus" => Page::Focus, _ => Page::Home } }
-    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Focus => "FOCO", Page::Settings => "AJUSTES" } }
+    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Settings => "settings" } }
+    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, _ => Page::Home } }
+    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Settings => "AJUSTES" } }
+    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Settings => ic::SETTINGS } }
+    /// cor do ícone "ligado" (mesmas do Kon atual)
+    fn color(self) -> Color32 { match self { Page::Music => Color32::from_rgb(244, 114, 182), Page::Weather => Color32::from_rgb(56, 189, 248), Page::Focus => Color32::from_rgb(255, 107, 91), Page::Todo => Color32::from_rgb(163, 230, 53), _ => Color32::from_rgb(251, 146, 60) } }
 }
 
 /// Mola criticamente amortecida: movimento suave, sem passar do ponto.
@@ -63,6 +71,11 @@ pub struct KonApp {
     last_frame: Instant,
     blink_at: Instant,
     focus: Focus,
+    weather: Arc<Mutex<Option<Weather>>>,
+    tasks: Tasks,
+    adding: Option<String>,
+    editing: bool,
+    focusable: bool,
     _tray: Option<tray::Tray>,
     quit: bool,
 }
@@ -74,6 +87,8 @@ impl KonApp {
         let settings = Settings::load();
         let ctx = cc.egui_ctx.clone();
         let media = Media::start(move || ctx.request_repaint());
+        let ctx2 = cc.egui_ctx.clone();
+        let weather = weather::start(move || ctx2.request_repaint());
         let hit = Arc::new(Mutex::new(Hit { ppp: 1.0, ..Default::default() }));
         spawn_cursor_watch(cc.egui_ctx.clone(), hit.clone());
         let mins = settings.focus_minutes.clamp(1, 180);
@@ -89,6 +104,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
+            weather, tasks: Tasks::load(), adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -168,6 +184,11 @@ impl eframe::App for KonApp {
             }
         }
 
+        // teclado só enquanto há um campo de texto aberto
+        let want_focus = self.adding.is_some() && self.view == View::Panel;
+        if want_focus != self.focusable { self.focusable = want_focus; crate::platform::set_focusable(want_focus); }
+        if self.view == View::Compact { self.adding = None; self.editing = false; }
+
         // ── animação do tamanho ──
         let target = self.target_size(&m);
         let a = self.w.step(target.x, dt, 22.0);
@@ -229,6 +250,17 @@ impl KonApp {
         let p = ui.painter().clone();
         // cabeçalho
         let hy = r.top() + 22.0;
+        if self.page == Page::Weather {
+            let w = self.weather.lock().unwrap().clone();
+            p.text(pos2(r.left() + 22.0, hy), Align2::LEFT_CENTER, "Clima", bold(13.0), fade(Color32::WHITE, alpha));
+            let city = w.as_ref().map(|w| w.city.clone()).unwrap_or_else(|| "localizando…".into());
+            p.text(pos2(r.left() + 66.0, hy), Align2::LEFT_CENTER, format!("{city} · atual"), FontId::proportional(13.0), fade(Color32::from_white_alpha(115), alpha));
+            p.text(pos2(r.right() - 22.0, hy), Align2::RIGHT_CENTER, format!("{:02}:{:02}", now.hour(), now.minute()), bold(12.0), fade(Color32::WHITE, alpha));
+            let body = Rect::from_min_max(pos2(r.left() + 28.0, r.top() + 42.0), pos2(r.right() - 28.0, r.bottom() - 50.0));
+            self.page_weather(ui, body, w.as_ref(), alpha);
+            self.nav(ui, Rect::from_min_max(pos2(r.left() + 16.0, r.bottom() - 46.0), pos2(r.right() - 16.0, r.bottom() - 6.0)), alpha);
+            return;
+        }
         let date = format!("{} {:02} {}", DAYS[now.weekday().num_days_from_sunday() as usize], now.day(), MONTHS[now.month0() as usize]);
         p.text(pos2(r.left() + 22.0, hy), Align2::LEFT_CENTER, date, bold(11.0), fade(DIM, alpha));
         p.text(pos2(r.right() - 22.0, hy), Align2::RIGHT_CENTER, format!("{:02}:{:02}", now.hour(), now.minute()), bold(12.0), fade(Color32::WHITE, alpha));
@@ -239,39 +271,195 @@ impl KonApp {
             Page::Home => self.page_home(ui, body, m, alpha),
             Page::Music => self.page_music(ui, body, m, alpha),
             Page::Focus => self.page_focus(ui, body, alpha),
+            Page::Todo => self.page_todo(ui, body, alpha),
+            Page::Weather => {}
             Page::Settings => self.page_settings(ui, body, alpha),
         }
         self.nav(ui, Rect::from_min_max(pos2(r.left() + 16.0, r.bottom() - 46.0), pos2(r.right() - 16.0, r.bottom() - 6.0)), alpha);
     }
 
     fn nav(&mut self, ui: &mut egui::Ui, bar: Rect, alpha: f32) {
-        let pages = [(Page::Home, Icon::Grid), (Page::Music, Icon::Note), (Page::Focus, Icon::Timer)];
-        let mut x = bar.center().x - 150.0;
-        for (pg, icon) in pages {
-            let active = self.page == pg;
-            let w = if active { 104.0 } else { 34.0 };
-            let rr = Rect::from_min_size(pos2(x, bar.center().y - 14.0), vec2(w, 28.0));
+        // mesma barra do Kon atual: "+" à esquerda, páginas no meio (a ativa vira pílula com nome), engrenagem à direita
+        let pages = [Page::Home, Page::Music, Page::Weather, Page::Focus, Page::Todo];
+        let widths: Vec<f32> = pages.iter().map(|p| if *p == self.page { 30.0 + text_w(ui, p.label(), 10.5) } else { 28.0 }).collect();
+        let total: f32 = widths.iter().sum::<f32>() + 2.0 * (pages.len() as f32 - 1.0);
+        let mut x = bar.center().x - total / 2.0;
+        for (i, pg) in pages.iter().enumerate() {
+            let active = self.page == *pg;
+            let rr = Rect::from_min_size(pos2(x, bar.center().y - 14.0), vec2(widths[i], 28.0));
             let resp = ui.interact(rr, ui.id().with(pg.id()), Sense::click());
             let p = ui.painter();
-            if active { p.rect_filled(rr, CornerRadius::same(14), fade(Color32::from_white_alpha(28), alpha)); }
+            if active { p.rect_filled(rr, CornerRadius::same(14), fade(Color32::from_white_alpha(26), alpha)); }
             else if resp.hovered() { p.rect_filled(rr, CornerRadius::same(14), fade(Color32::from_white_alpha(12), alpha)); }
-            let col = if active { Color32::WHITE } else { Color32::from_gray(150) };
+            let col = if active { Color32::WHITE } else if resp.hovered() { Color32::from_white_alpha(200) } else { Color32::from_white_alpha(102) };
             if active {
-                draw_icon(p, icon, pos2(rr.left() + 18.0, rr.center().y), fade(col, alpha));
-                p.text(pos2(rr.left() + 32.0, rr.center().y), Align2::LEFT_CENTER, pg.label(), bold(10.5), fade(col, alpha));
+                p.text(pos2(rr.left() + 15.0, rr.center().y), Align2::CENTER_CENTER, pg.icon(), icon_font(13.0), fade(col, alpha));
+                p.text(pos2(rr.left() + 26.0, rr.center().y), Align2::LEFT_CENTER, pg.label(), bold(10.5), fade(col, alpha));
             } else {
-                draw_icon(p, icon, rr.center(), fade(col, alpha));
+                p.text(rr.center(), Align2::CENTER_CENTER, pg.icon(), icon_font(13.0), fade(col, alpha));
             }
-            if resp.clicked() { self.set_page(pg); }
-            x += w + 4.0;
+            if resp.clicked() { self.adding = None; self.set_page(*pg); }
+            x += widths[i] + 2.0;
         }
-        // engrenagem à direita
-        let g = Rect::from_center_size(pos2(bar.right() - 16.0, bar.center().y), vec2(28.0, 28.0));
+        // "+" : nova tarefa
+        let plus = Rect::from_center_size(pos2(bar.left() + 14.0, bar.center().y), vec2(28.0, 28.0));
+        let r1 = ui.interact(plus, ui.id().with("plus"), Sense::click());
+        let p = ui.painter();
+        p.circle_filled(plus.center(), 14.0, fade(Color32::from_white_alpha(if r1.hovered() { 30 } else { 16 }), alpha));
+        p.text(plus.center(), Align2::CENTER_CENTER, ic::PLUS, icon_font(14.0), fade(Color32::from_white_alpha(180), alpha));
+        if r1.clicked() { self.set_page(Page::Todo); self.adding = Some(String::new()); }
+        // engrenagem
+        let g = Rect::from_center_size(pos2(bar.right() - 14.0, bar.center().y), vec2(28.0, 28.0));
         let resp = ui.interact(g, ui.id().with("gear"), Sense::click());
         let p = ui.painter();
-        if resp.hovered() || self.page == Page::Settings { p.rect_filled(g, CornerRadius::same(14), fade(Color32::from_white_alpha(20), alpha)); }
-        p.text(g.center(), Align2::CENTER_CENTER, "⚙", FontId::proportional(14.0), fade(Color32::from_gray(170), alpha));
+        if resp.hovered() || self.page == Page::Settings { p.circle_filled(g.center(), 14.0, fade(Color32::from_white_alpha(20), alpha)); }
+        p.text(g.center(), Align2::CENTER_CENTER, ic::SETTINGS, icon_font(13.0), fade(Color32::from_white_alpha(if resp.hovered() { 204 } else { 102 }), alpha));
         if resp.clicked() { self.page = if self.page == Page::Settings { Page::from(&self.settings.page) } else { Page::Settings }; }
+    }
+
+    fn page_weather(&mut self, ui: &mut egui::Ui, body: Rect, w: Option<&Weather>, alpha: f32) {
+        let p = ui.painter().clone();
+        let lw = body.width() * 0.4;
+        let (txt, icon) = w.map(|w| weather::wmo(w.code, w.is_day)).unwrap_or(("Carregando o clima…", ic::CLOUD));
+        let day = w.map_or(true, |w| w.is_day);
+        let cy = body.center().y;
+        p.text(pos2(body.left(), cy - 34.0), Align2::LEFT_CENTER, icon, icon_font(30.0), fade(if day { Color32::from_rgb(252, 211, 77) } else { Color32::from_rgb(199, 210, 254) }, alpha));
+        p.text(pos2(body.left() + 40.0, cy - 34.0), Align2::LEFT_CENTER, w.map_or("--°".into(), |w| format!("{}°", w.temp)), bold(44.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(body.left(), cy + 4.0), Align2::LEFT_CENTER, txt, FontId::proportional(13.0), fade(Color32::WHITE, alpha));
+        if let Some(w) = w { p.text(pos2(body.left(), cy + 22.0), Align2::LEFT_CENTER, format!("Máx {}° · Mín {}°", w.max, w.min), FontId::proportional(11.5), fade(Color32::from_white_alpha(115), alpha)); }
+        // chips
+        let mut x = body.left();
+        let chips = [(ic::THERMOMETER, w.map(|w| format!("{}°", w.feels))), (ic::DROPLETS, w.map(|w| format!("{}%", w.humidity))), (ic::WIND, w.map(|w| format!("{} km/h", w.wind))), (ic::CLOUD_RAIN, w.map(|w| format!("{}%", w.rain_max)))];
+        for (i, v) in chips {
+            let v = v.unwrap_or_else(|| "—".into());
+            let cw = 26.0 + text_w(ui, &v, 10.5);
+            if x + cw > body.left() + lw { break; }
+            let rr = Rect::from_min_size(pos2(x, cy + 38.0), vec2(cw, 22.0));
+            p.rect_filled(rr, CornerRadius::same(11), fade(Color32::from_white_alpha(18), alpha));
+            p.text(pos2(rr.left() + 12.0, rr.center().y), Align2::CENTER_CENTER, i, icon_font(11.0), fade(Color32::from_white_alpha(115), alpha));
+            p.text(pos2(rr.left() + 20.0, rr.center().y), Align2::LEFT_CENTER, v, FontId::proportional(10.5), fade(Color32::from_white_alpha(190), alpha));
+            x += cw + 4.0;
+        }
+        // arco do sol
+        let right = Rect::from_min_max(pos2(body.left() + lw + 8.0, body.top()), body.max);
+        let base_y = right.top() + 66.0;
+        let (x0, x1) = (right.left() + 18.0, right.right() - 18.0);
+        let mins = |iso: &str| iso.get(11..16).and_then(|h| Some(h[..2].parse::<f32>().ok()? * 60.0 + h[3..].parse::<f32>().ok()?));
+        let (sr, ss, nw) = w.map(|w| (mins(&w.sunrise), mins(&w.sunset), mins(&w.now_iso))).unwrap_or((None, None, None));
+        let pts: Vec<Pos2> = (0..=40).map(|i| { let t = i as f32 / 40.0; pos2(x0 + (x1 - x0) * t, base_y - (t * std::f32::consts::PI).sin() * 52.0) }).collect();
+        p.add(egui::Shape::line(pts.clone(), Stroke::new(2.2_f32, fade(Color32::from_rgb(253, 186, 116).gamma_multiply(if day { 1.0 } else { 0.4 }), alpha))));
+        p.add(egui::Shape::dashed_line(&[pos2(right.left(), base_y), pos2(right.right(), base_y)], Stroke::new(1.0_f32, fade(Color32::from_white_alpha(46), alpha)), 3.0, 4.0));
+        if let (Some(a), Some(b), Some(n)) = (sr, ss, nw) {
+            let t = ((n - a) / (b - a)).clamp(0.0, 1.0);
+            let sp = pos2(x0 + (x1 - x0) * t, if day { base_y - (t * std::f32::consts::PI).sin() * 52.0 } else { base_y });
+            p.circle_filled(sp, 13.0, fade(Color32::from_rgba_unmultiplied(253, 230, 138, 60), alpha));
+            p.circle_filled(sp, 5.0, fade(Color32::from_rgb(255, 247, 214), alpha));
+            let hm = |iso: &str| iso.get(11..16).unwrap_or("--:--").to_string();
+            let wv = w.unwrap();
+            p.text(pos2(x0, base_y + 12.0), Align2::CENTER_CENTER, hm(&wv.sunrise), FontId::proportional(9.5), fade(Color32::from_white_alpha(115), alpha));
+            p.text(pos2(x1, base_y + 12.0), Align2::CENTER_CENTER, hm(&wv.sunset), FontId::proportional(9.5), fade(Color32::from_white_alpha(115), alpha));
+            let left = (b - n).max(0.0) as i32;
+            if day { p.text(pos2((x0 + x1) / 2.0, base_y + 12.0), Align2::CENTER_CENTER, format!("{}h{:02} de sol", left / 60, left % 60), FontId::proportional(9.5), fade(Color32::from_white_alpha(140), alpha)); }
+        }
+        // próximas horas
+        if let Some(w) = w {
+            let cw = right.width() / 6.0;
+            for (i, h) in w.hours.iter().enumerate() {
+                let cx = right.left() + cw * (i as f32 + 0.5); let y = base_y + 30.0;
+                p.text(pos2(cx, y), Align2::CENTER_CENTER, format!("{}h", h.hour), FontId::proportional(10.0), fade(Color32::from_white_alpha(115), alpha));
+                p.text(pos2(cx, y + 16.0), Align2::CENTER_CENTER, weather::wmo(h.code, h.is_day).1, icon_font(14.0), fade(if h.rain >= 50 { Color32::from_rgb(125, 211, 252) } else { Color32::from_white_alpha(180) }, alpha));
+                p.text(pos2(cx, y + 33.0), Align2::CENTER_CENTER, format!("{}°", h.temp), bold(12.0), fade(Color32::WHITE, alpha));
+                if h.rain >= 20 { p.text(pos2(cx, y + 47.0), Align2::CENTER_CENTER, format!("{}%", h.rain), FontId::proportional(9.5), fade(Color32::from_rgb(125, 211, 252), alpha)); }
+            }
+        }
+    }
+
+    fn page_todo(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        use chrono::Datelike;
+        let p = ui.painter().clone();
+        let green = Color32::from_rgb(34, 197, 94);
+        let lw = body.width() * 0.22; let mw = body.width() * 0.43;
+        let left = Rect::from_min_size(body.min, vec2(lw, body.height()));
+        let mid = Rect::from_min_size(pos2(left.right() + 12.0, body.top()), vec2(mw, body.height()));
+        let cal = Rect::from_min_max(pos2(mid.right() + 12.0, body.top()), body.max);
+        // coluna esquerda
+        p.text(pos2(left.left(), left.top() + 8.0), Align2::LEFT_CENTER, "Tarefas", bold(15.0), fade(Color32::WHITE, alpha));
+        let (d, n) = (self.tasks.done(), self.tasks.list.len());
+        p.text(pos2(left.left(), left.top() + 40.0), Align2::LEFT_CENTER, format!("{d}/{n}"), bold(30.0), fade(Color32::WHITE, alpha));
+        let rc = pos2(left.left() + 20.0 + text_w(ui, &format!("{d}/{n}"), 30.0), left.top() + 40.0);
+        p.circle_stroke(rc, 11.0, Stroke::new(3.2_f32, fade(Color32::from_rgba_unmultiplied(34, 197, 94, 50), alpha)));
+        if n > 0 { arc(&p, rc, 11.0, d as f32 / n as f32, Stroke::new(3.2_f32, fade(green, alpha))); }
+        let now = chrono::Local::now();
+        let dt = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"][now.weekday().num_days_from_sunday() as usize];
+        let mt = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][now.month0() as usize];
+        p.text(pos2(left.left(), left.top() + 64.0), Align2::LEFT_CENTER, format!("{dt}, {} {mt}", now.day()), FontId::proportional(12.0), fade(Color32::from_white_alpha(115), alpha));
+        let b1 = Rect::from_min_size(pos2(left.left(), left.bottom() - 62.0), vec2(lw, 28.0));
+        let b2 = Rect::from_min_size(pos2(left.left(), left.bottom() - 30.0), vec2(lw, 28.0));
+        let r1 = ui.interact(b1, ui.id().with("addtask"), Sense::click());
+        p.rect_filled(b1, CornerRadius::same(14), fade(Color32::from_rgba_unmultiplied(34, 197, 94, if r1.hovered() { 64 } else { 38 }), alpha));
+        let gcol = fade(Color32::from_rgb(74, 222, 128), alpha);
+        let tw = text_w(ui, "Nova tarefa", 11.5);
+        p.text(pos2(b1.center().x - tw / 2.0 - 4.0, b1.center().y), Align2::RIGHT_CENTER, ic::PLUS, icon_font(12.0), gcol);
+        p.text(pos2(b1.center().x - tw / 2.0, b1.center().y), Align2::LEFT_CENTER, "Nova tarefa", bold(11.5), gcol);
+        if r1.clicked() { self.adding = Some(String::new()); }
+        if pill(ui, &p, b2, if self.editing { "Pronto" } else { "Editar tarefas" }, self.editing, alpha).clicked() { self.editing = !self.editing; }
+        // lista
+        let mut y = mid.top();
+        let row_h = 26.0;
+        if let Some(mut text) = self.adding.take() {
+            let rr = Rect::from_min_size(pos2(mid.left(), y), vec2(mid.width(), row_h));
+            p.rect_filled(rr, CornerRadius::same(8), fade(Color32::from_white_alpha(20), alpha));
+            let te = egui::TextEdit::singleline(&mut text).hint_text("Nova tarefa — Enter para adicionar").frame(false).font(FontId::proportional(12.5)).desired_width(mid.width() - 20.0);
+            let resp = ui.put(rr.shrink2(vec2(10.0, 4.0)), te);
+            if !resp.has_focus() && !resp.lost_focus() { resp.request_focus(); }
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if enter { self.tasks.add(&text); self.adding = None; }
+            else if esc { self.adding = None; }
+            else { self.adding = Some(text); }
+            y += row_h + 4.0;
+        }
+        let mut toggle_id = None; let mut remove_id = None;
+        for t in self.tasks.list.iter() {
+            if y + row_h > mid.bottom() { break; }
+            let rr = Rect::from_min_size(pos2(mid.left(), y), vec2(mid.width(), row_h));
+            let resp = ui.interact(rr, ui.id().with(("task", t.id)), Sense::click());
+            p.rect_filled(rr, CornerRadius::same(8), fade(Color32::from_white_alpha(if resp.hovered() { 22 } else { 12 }), alpha));
+            let c = pos2(rr.left() + 14.0, rr.center().y);
+            if t.done { p.circle_filled(c, 7.0, fade(green, alpha)); p.text(c, Align2::CENTER_CENTER, ic::CHECK, icon_font(9.0), fade(Color32::BLACK, alpha)); }
+            else { p.circle_stroke(c, 6.5, Stroke::new(1.5_f32, fade(Color32::from_white_alpha(110), alpha))); }
+            let tc = if t.done { Color32::from_white_alpha(90) } else { Color32::WHITE };
+            let txt = ellipsize(&t.text, 34);
+            let g = p.layout_no_wrap(txt, FontId::proportional(12.5), fade(tc, alpha));
+            let tw = g.size().x;
+            p.galley(pos2(rr.left() + 28.0, rr.center().y - g.size().y / 2.0), g, Color32::WHITE);
+            if t.done { p.line_segment([pos2(rr.left() + 28.0, rr.center().y), pos2(rr.left() + 28.0 + tw, rr.center().y)], Stroke::new(1.0_f32, fade(Color32::from_white_alpha(90), alpha))); }
+            if self.editing {
+                let del = Rect::from_center_size(pos2(rr.right() - 14.0, rr.center().y), vec2(22.0, 22.0));
+                let rd = ui.interact(del, ui.id().with(("del", t.id)), Sense::click());
+                p.text(del.center(), Align2::CENTER_CENTER, ic::TRASH_2, icon_font(12.0), fade(if rd.hovered() { Color32::from_rgb(248, 113, 113) } else { Color32::from_white_alpha(110) }, alpha));
+                if rd.clicked() { remove_id = Some(t.id); }
+            } else if resp.clicked() { toggle_id = Some(t.id); }
+            y += row_h + 4.0;
+        }
+        if let Some(id) = toggle_id { self.tasks.toggle(id); }
+        if let Some(id) = remove_id { self.tasks.remove(id); }
+        if self.tasks.list.is_empty() && self.adding.is_none() {
+            p.text(mid.center(), Align2::CENTER_CENTER, "Nenhuma tarefa. Clique em Nova tarefa.", FontId::proportional(12.0), fade(Color32::from_white_alpha(100), alpha));
+        }
+        // calendário da semana
+        let months = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+        p.text(pos2(cal.left(), cal.top() + 8.0), Align2::LEFT_CENTER, format!("{} {}", months[now.month0() as usize], now.year()), bold(12.5), fade(Color32::WHITE, alpha));
+        let start = now.date_naive() - chrono::Duration::days(now.weekday().num_days_from_sunday() as i64);
+        let cw = cal.width() / 7.0;
+        for i in 0..7 {
+            let day = start + chrono::Duration::days(i);
+            let cx = cal.left() + cw * (i as f32 + 0.5);
+            p.text(pos2(cx, cal.top() + 32.0), Align2::CENTER_CENTER, ["D", "S", "T", "Q", "Q", "S", "S"][i as usize], FontId::proportional(10.0), fade(Color32::from_white_alpha(100), alpha));
+            let today = day == now.date_naive();
+            if today { p.circle_filled(pos2(cx, cal.top() + 52.0), 11.0, fade(green, alpha)); }
+            p.text(pos2(cx, cal.top() + 52.0), Align2::CENTER_CENTER, day.day().to_string(), if today { bold(12.0) } else { FontId::proportional(12.0) }, fade(if today { Color32::BLACK } else { Color32::WHITE }, alpha));
+        }
     }
 
     fn page_home(&mut self, ui: &mut egui::Ui, body: Rect, m: &MediaState, alpha: f32) {
@@ -286,14 +474,14 @@ impl KonApp {
         card(&p, c2, Color32::from_rgb(58, 28, 110), alpha);
         p.text(pos2(c2.left() + 14.0, c2.bottom() - 34.0), Align2::LEFT_BOTTOM, ellipsize(if m.active { &m.title } else { "Nada tocando" }, 26), bold(16.0), fade(Color32::WHITE, alpha));
         p.text(pos2(c2.left() + 14.0, c2.bottom() - 14.0), Align2::LEFT_BOTTOM, ellipsize(if m.active { &m.artist } else { "Toque música em qualquer app" }, 34), FontId::proportional(12.0), fade(DIM, alpha));
-        if round_button(ui, &p, pos2(c2.right() - 30.0, c2.bottom() - 30.0), 17.0, if m.playing { "⏸" } else { "▶" }, alpha, true).clicked() { self.media.send(MediaCmd::Toggle); }
+        if round_button(ui, &p, pos2(c2.right() - 30.0, c2.bottom() - 30.0), 17.0, if m.playing { "\u{e12e}" } else { "\u{e13c}" }, alpha, true).clicked() { self.media.send(MediaCmd::Toggle); }
         // foco
         card(&p, c3, Color32::from_rgb(40, 18, 60), alpha);
         p.text(pos2(c3.left() + 14.0, c3.top() + 16.0), Align2::LEFT_CENTER, "FOCO", bold(10.0), fade(Color32::from_rgb(216, 180, 254), alpha));
         p.text(pos2(c3.left() + 14.0, c3.bottom() - 34.0), Align2::LEFT_BOTTOM, mmss(self.focus.left), FontId::monospace(24.0), fade(Color32::WHITE, alpha));
         let st = if self.focus.running_until.is_some() { "Rodando" } else if self.focus.finished_at.is_some() { "Concluído!" } else if self.focus.left < self.focus.total as f32 { "Pausado" } else { "Pronto" };
         p.text(pos2(c3.left() + 14.0, c3.bottom() - 14.0), Align2::LEFT_BOTTOM, st, FontId::proportional(12.0), fade(DIM, alpha));
-        if round_button(ui, &p, pos2(c3.right() - 24.0, c3.bottom() - 24.0), 13.0, if self.focus.running_until.is_some() { "⏸" } else { "▶" }, alpha, false).clicked() { self.focus_toggle(); }
+        if round_button(ui, &p, pos2(c3.right() - 24.0, c3.bottom() - 24.0), 13.0, if self.focus.running_until.is_some() { "\u{e12e}" } else { "\u{e13c}" }, alpha, false).clicked() { self.focus_toggle(); }
         // Claude Code (chega na próxima fase)
         card(&p, c1, Color32::from_rgb(45, 28, 8), alpha);
         p.text(pos2(c1.left() + 14.0, c1.top() + 16.0), Align2::LEFT_CENTER, "CLAUDE", bold(10.0), fade(Color32::from_rgb(253, 230, 138), alpha));
@@ -320,9 +508,9 @@ impl KonApp {
             p.text(pos2(right, py + 14.0), Align2::RIGHT_CENTER, format!("-{}", mmss((m.duration - m.position) as f32)), FontId::monospace(10.5), fade(DIM, alpha));
         }
         let cy = art.bottom() - 16.0; let cx = (x + right) / 2.0;
-        if icon_button(ui, &p, pos2(cx - 56.0, cy), "⏮", alpha).clicked() { self.media.send(MediaCmd::Prev); }
-        if round_button(ui, &p, pos2(cx, cy), 19.0, if m.playing { "⏸" } else { "▶" }, alpha, true).clicked() { self.media.send(MediaCmd::Toggle); }
-        if icon_button(ui, &p, pos2(cx + 56.0, cy), "⏭", alpha).clicked() { self.media.send(MediaCmd::Next); }
+        if icon_button(ui, &p, pos2(cx - 56.0, cy), "\u{e15f}", alpha).clicked() { self.media.send(MediaCmd::Prev); }
+        if round_button(ui, &p, pos2(cx, cy), 19.0, if m.playing { "\u{e12e}" } else { "\u{e13c}" }, alpha, true).clicked() { self.media.send(MediaCmd::Toggle); }
+        if icon_button(ui, &p, pos2(cx + 56.0, cy), "\u{e160}", alpha).clicked() { self.media.send(MediaCmd::Next); }
     }
 
     fn page_focus(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
@@ -375,6 +563,14 @@ impl KonApp {
 
 /* ───────── desenho ───────── */
 
+fn icon_font(size: f32) -> FontId { FontId::new(size, FontFamily::Name("icons".into())) }
+fn text_w(ui: &egui::Ui, t: &str, size: f32) -> f32 { ui.painter().layout_no_wrap(t.to_string(), bold(size), Color32::WHITE).size().x }
+/// arco de progresso (fração 0..1) começando no topo
+fn arc(p: &egui::Painter, c: Pos2, r: f32, frac: f32, st: Stroke) {
+    let n = (48.0 * frac).ceil().max(2.0) as usize;
+    let pts: Vec<Pos2> = (0..=n).map(|i| { let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * i as f32 / n as f32; pos2(c.x + r * a.cos(), c.y + r * a.sin()) }).collect();
+    p.add(egui::Shape::line(pts, st));
+}
 fn fade(c: Color32, a: f32) -> Color32 { c.gamma_multiply(a.clamp(0.0, 1.0)) }
 fn bold(size: f32) -> FontId { FontId::new(size, FontFamily::Name("bold".into())) }
 fn mmss(s: f32) -> String { let s = s.max(0.0).round() as u32; format!("{}:{:02}", s / 60, s % 60) }
@@ -405,25 +601,6 @@ fn draw_island(p: &egui::Painter, r: Rect, view: View) {
     }
 }
 
-#[derive(Clone, Copy)]
-enum Icon { Grid, Note, Timer }
-
-/// Ícones desenhados com formas (não dependem de fonte).
-fn draw_icon(p: &egui::Painter, i: Icon, c: Pos2, col: Color32) {
-    let st = Stroke::new(1.6_f32, col);
-    match i {
-        Icon::Grid => for (dx, dy) in [(-3.2, -3.2), (3.2, -3.2), (-3.2, 3.2), (3.2, 3.2)] {
-            p.rect_stroke(Rect::from_center_size(pos2(c.x + dx, c.y + dy), vec2(4.6, 4.6)), CornerRadius::same(1), st, egui::StrokeKind::Middle);
-        },
-        Icon::Note => { p.text(c, Align2::CENTER_CENTER, "♫", FontId::proportional(14.0), col); }
-        Icon::Timer => {
-            p.circle_stroke(pos2(c.x, c.y + 0.8), 5.6, st);
-            p.line_segment([pos2(c.x, c.y + 0.8), pos2(c.x, c.y - 2.6)], st);
-            p.line_segment([pos2(c.x - 1.8, c.y - 6.6), pos2(c.x + 1.8, c.y - 6.6)], st);
-        }
-    }
-}
-
 /// O mascote: tofu branco com dois olhos (piscam por tempo, não sem parar).
 fn draw_tofu(p: &egui::Painter, c: Pos2, s: f32, blink: bool, a: f32) {
     let body = Rect::from_center_size(c, vec2(26.0 * s, 21.0 * s));
@@ -451,7 +628,7 @@ fn round_button(ui: &mut egui::Ui, p: &egui::Painter, c: Pos2, r: f32, glyph: &s
     let resp = ui.interact(rect, ui.id().with(("rb", (c.x as i32, c.y as i32))), Sense::click());
     let bg = if primary { Color32::WHITE } else { Color32::from_white_alpha(if resp.hovered() { 40 } else { 26 }) };
     p.circle_filled(c, r * if resp.is_pointer_button_down_on() { 0.92 } else { 1.0 }, fade(bg, a));
-    p.text(c, Align2::CENTER_CENTER, glyph, FontId::proportional(r * 0.85), fade(if primary { Color32::BLACK } else { Color32::WHITE }, a));
+    p.text(c, Align2::CENTER_CENTER, glyph, icon_font(r * 0.85), fade(if primary { Color32::BLACK } else { Color32::WHITE }, a));
     resp
 }
 
@@ -459,7 +636,7 @@ fn icon_button(ui: &mut egui::Ui, p: &egui::Painter, c: Pos2, glyph: &str, a: f3
     let rect = Rect::from_center_size(c, vec2(32.0, 32.0));
     let resp = ui.interact(rect, ui.id().with(("ib", (c.x as i32, c.y as i32))), Sense::click());
     if resp.hovered() { p.circle_filled(c, 16.0, fade(Color32::from_white_alpha(18), a)); }
-    p.text(c, Align2::CENTER_CENTER, glyph, FontId::proportional(18.0), fade(Color32::WHITE, a));
+    p.text(c, Align2::CENTER_CENTER, glyph, icon_font(18.0), fade(Color32::WHITE, a));
     resp
 }
 
@@ -499,6 +676,8 @@ fn install_fonts(ctx: &egui::Context) {
         f.font_data.insert("kon-mono".into(), Arc::new(egui::FontData::from_owned(m)));
         f.families.entry(FontFamily::Monospace).or_default().insert(0, "kon-mono".into());
     }
+    f.font_data.insert("lucide".into(), Arc::new(egui::FontData::from_static(include_bytes!("../assets/lucide.ttf"))));
+    f.families.insert(FontFamily::Name("icons".into()), vec!["lucide".into()]);
     let mut b = vec!["kon-bold".to_string()];
     b.extend(f.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
     f.families.insert(FontFamily::Name("bold".into()), b);

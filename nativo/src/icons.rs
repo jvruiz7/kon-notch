@@ -1,0 +1,47 @@
+#![allow(dead_code)]
+//! Ícones Lucide (mesma biblioteca do Kon atual), desenhados pela fonte lucide.ttf embutida (licença ISC).
+
+pub const LAYOUT_GRID: char = '\u{e0ff}';
+pub const FOLDER_OPEN: char = '\u{e247}';
+pub const MUSIC_2: char = '\u{e34a}';
+pub const TIMER: char = '\u{e1e0}';
+pub const LIST_TODO: char = '\u{e4c3}';
+pub const ASTERISK: char = '\u{e1ef}';
+pub const ZAP: char = '\u{e1b4}';
+pub const CPU: char = '\u{e0a9}';
+pub const CLOUD_SUN: char = '\u{e216}';
+pub const GLASS_WATER: char = '\u{e2d5}';
+pub const MOON: char = '\u{e11e}';
+pub const LOCK: char = '\u{e10b}';
+pub const LOCK_OPEN: char = '\u{e10c}';
+pub const SETTINGS: char = '\u{e154}';
+pub const PLUS: char = '\u{e13d}';
+pub const MINUS: char = '\u{e11c}';
+pub const SEARCH: char = '\u{e151}';
+pub const PLAY: char = '\u{e13c}';
+pub const PAUSE: char = '\u{e12e}';
+pub const SKIP_BACK: char = '\u{e15f}';
+pub const SKIP_FORWARD: char = '\u{e160}';
+pub const SHUFFLE: char = '\u{e15e}';
+pub const REPEAT: char = '\u{e146}';
+pub const CHECK: char = '\u{e06c}';
+pub const CLIPBOARD_LIST: char = '\u{e086}';
+pub const SUN: char = '\u{e178}';
+pub const CLOUD: char = '\u{e088}';
+pub const CLOUD_RAIN: char = '\u{e08e}';
+pub const CLOUD_MOON: char = '\u{e215}';
+pub const CLOUD_FOG: char = '\u{e214}';
+pub const CLOUD_DRIZZLE: char = '\u{e08a}';
+pub const CLOUD_SNOW: char = '\u{e090}';
+pub const CLOUD_LIGHTNING: char = '\u{e08c}';
+pub const DROPLETS: char = '\u{e0b5}';
+pub const WIND: char = '\u{e1b0}';
+pub const THERMOMETER: char = '\u{e186}';
+pub const CHEVRON_LEFT: char = '\u{e06e}';
+pub const CHEVRON_RIGHT: char = '\u{e06f}';
+pub const PENCIL: char = '\u{e1f9}';
+pub const TRASH_2: char = '\u{e18e}';
+pub const CIRCLE: char = '\u{e076}';
+pub const CIRCLE_CHECK: char = '\u{e226}';
+pub const MESSAGE_SQUARE_QUOTE: char = '\u{e572}';
+pub const X: char = '\u{e1b2}';

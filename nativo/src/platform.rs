@@ -53,6 +53,18 @@ mod imp {
         }
     }
 
+    /// Permite (ou não) que o Kon receba o teclado. Fica "sem foco" por padrão para não roubar a janela em que você está.
+    pub fn set_focusable(on: bool) {
+        if let Some(h) = hwnd() {
+            unsafe {
+                let ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+                let na = WS_EX_NOACTIVATE.0 as isize;
+                SetWindowLongPtrW(h, GWL_EXSTYLE, if on { ex & !na } else { ex | na });
+                if on { let _ = SetForegroundWindow(h); }
+            }
+        }
+    }
+
     pub fn data_dir() -> std::path::PathBuf {
         let base = std::env::var_os("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::PathBuf::from("."));
         base.join("KonNativo")
@@ -65,6 +77,7 @@ mod imp {
     pub fn cursor_in_window() -> Option<(i32, i32)> { None }
     pub fn primary_work_area() -> PxRect { PxRect { x: 0, y: 0, w: 1920, h: 1080 } }
     pub fn make_tool_window() {}
+    pub fn set_focusable(_on: bool) {}
     pub fn data_dir() -> std::path::PathBuf { std::env::temp_dir().join("kon-nativo") }
 }
 
