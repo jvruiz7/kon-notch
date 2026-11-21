@@ -1,0 +1,35 @@
+name: Kon nativo (Rust)
+on:
+  push:
+    branches: [main]
+    paths: ["nativo/**", ".github/workflows/nativo.yml"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults: { run: { working-directory: nativo } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: nativo }
+      - run: cargo build --release
+      - name: Abre o Kon nativo por 15 s (não pode fechar sozinho)
+        shell: pwsh
+        run: |
+          $p = Start-Process target\release\kon.exe -PassThru
+          Start-Sleep 15
+          if ($p.HasExited) { Write-Host "::error::o Kon nativo fechou sozinho (código $($p.ExitCode))"; exit 1 }
+          $mb = [math]::Round((Get-Process -Id $p.Id).WorkingSet64 / 1MB)
+          $kb = [math]::Round((Get-Item target\release\kon.exe).Length / 1KB)
+          Write-Host "Memória: $mb MB · tamanho do exe: $kb KB"
+          "MEM=$mb" >> $env:GITHUB_ENV; "SIZE=$kb" >> $env:GITHUB_ENV
+          Stop-Process -Id $p.Id -Force
+      - name: Publica como pré-versão (não afeta as atualizações do Kon)
+        shell: pwsh
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          $tag = "nativo-" + (Get-Date -Format 'yyyyMMdd-HHmm')
+          Copy-Item target\release\kon.exe "Kon-nativo.exe"
+          gh release create $tag "Kon-nativo.exe" --prerelease --title "Kon nativo (testes) $tag" --notes "Versão nativa em Rust, para testes. Memória: $env:MEM MB · exe: $env:SIZE KB. Não substitui o Kon instalado: rode o .exe direto."
