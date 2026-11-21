@@ -17,7 +17,7 @@ fn main() -> eframe::Result<()> {
     let scale = guess_scale(area.w);
     let x = area.x as f32 / scale + (area.w as f32 / scale - WIN_W) / 2.0;
 
-    let opts = eframe::NativeOptions {
+    let make = |renderer: eframe::Renderer| eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Kon")
             .with_inner_size([WIN_W, WIN_H])
@@ -29,9 +29,14 @@ fn main() -> eframe::Result<()> {
             .with_taskbar(false)
             .with_mouse_passthrough(true),
         vsync: true,
+        renderer,
         ..Default::default()
     };
-    let r = eframe::run_native("Kon", opts, Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
+    // OpenGL é o mais leve; em PCs sem OpenGL (máquinas virtuais, área de trabalho remota) usa DirectX 12 / WARP
+    let first = eframe::run_native("Kon", make(eframe::Renderer::Glow), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
+    if first.is_ok() { return first; }
+    let r = eframe::run_native("Kon", make(eframe::Renderer::Wgpu), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
+    let r = r.map_err(|e| { eprintln!("glow falhou: {first:?}"); e });
     if let Err(e) = &r {
         // sem console no Windows: o erro vai para %APPDATA%\KonNativo\erro.log
         let d = platform::data_dir();
