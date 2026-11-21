@@ -17,23 +17,23 @@ export const PANEL_SIZE = {};
 export const PANEL_DEFAULT = [660, 278];
 
 export const PAGE_META = {
-  home: { label: "Home", nav: "HOME", Icon: LayoutGrid, sq: "bg-orange-500" },
+  home: { label: "Início", nav: "INÍCIO", Icon: LayoutGrid, sq: "bg-orange-500" },
   files: { label: "Arquivos", nav: "ARQUIVOS", Icon: FolderOpen, sq: "bg-amber-400" },
   clip: { label: "Área de transferência", nav: "CLIPS", Icon: ClipboardList, sq: "bg-teal-500" },
-  music: { label: "Music", nav: "MUSIC", Icon: Music2, sq: "bg-pink-500" },
-  focus: { label: "Focus", nav: "FOCUS", Icon: Timer, sq: "bg-[#ff6b5b]" },
+  music: { label: "Música", nav: "MÚSICA", Icon: Music2, sq: "bg-pink-500" },
+  focus: { label: "Foco", nav: "FOCO", Icon: Timer, sq: "bg-[#ff6b5b]" },
   weather: { label: "Clima", nav: "CLIMA", Icon: CloudSun, sq: "bg-sky-500" },
-  todo: { label: "To-do", nav: "TO-DO", Icon: ListTodo, sq: "bg-lime-500" },
+  todo: { label: "Tarefas", nav: "TAREFAS", Icon: ListTodo, sq: "bg-lime-500" },
   claude: { label: "Claude Code", nav: "CLAUDE", Icon: Asterisk, sq: "bg-purple-500" },
   quick: { label: "Atalhos", nav: "ATALHOS", Icon: Zap, sq: "bg-yellow-400" },
   system: { label: "Sistema", nav: "SISTEMA", Icon: Cpu, sq: "bg-slate-400" },
-  water: { label: "Water", nav: "WATER", Icon: GlassWater, sq: "bg-sky-400" },
+  water: { label: "Água", nav: "ÁGUA", Icon: GlassWater, sq: "bg-sky-400" },
 };
 export const DEFAULT_ORDER = ["home", "files", "clip", "music", "weather", "focus", "todo", "claude", "quick", "system", "water"];
 
 export const DURATION = 195;
 export const CLAUDE_STEP = 3;
-export const STAGES = ["READ", "EDIT", "TEST", "DONE"];
+export const STAGES = ["LER", "EDITAR", "TESTAR", "PRONTO"];
 export const BASE_LYRICS = [
   "Engine humming, midnight calling", "Neon signs in the rearview", "Windows down, the city's glowing",
   "Radio static, hearts on fire", "Chasing echoes down the highway", "Every streetlight turning gold",
@@ -46,14 +46,14 @@ export const lyricIndex = (pos) => Math.min(LYRICS.length - 1, Math.floor(pos / 
 /* ═════════════════════════ Formatação ═════════════════════════ */
 export const fmt = (s) => { s = Math.max(0, Math.floor(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 export const pad = (n) => String(n).padStart(2, "0");
-export const DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-export const DAYS_T = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-export const MONTHS = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-export const MONTHS_T = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-export const MONTHS_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-export const WEEK = ["S", "M", "T", "W", "T", "F", "S"];
+export const DAYS = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
+export const DAYS_T = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+export const MONTHS = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
+export const MONTHS_T = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+export const MONTHS_FULL = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+export const WEEK = ["D", "S", "T", "Q", "Q", "S", "S"];
 export const fmtDate = (d) => `${DAYS[d.getDay()]} ${pad(d.getDate())} ${MONTHS[d.getMonth()]}`;
-export const fmtClock = (d) => d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+export const fmtClock = (d) => d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 export const fmtNum = (v) => new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 4 }).format(v);
 
 /* ═════════════════════════ Calculadora offline ═════════════════════════ */

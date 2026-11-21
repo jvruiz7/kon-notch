@@ -32,7 +32,7 @@ const CHAT_SYSTEM =
   "Seja breve (até ~120 palavras), use linhas curtas ou marcadores '• '. Sem títulos markdown, tabelas ou negrito.";
 const TRANSLATE_SYSTEM = "You are a translation engine. Translate faithfully and naturally, keeping tone, names, numbers and line breaks. Reply with JSON only.";
 const TEST_RE = /\b(test|tests|jest|vitest|pytest|mocha|playwright|cypress|cargo test|go test|npm run (test|lint|build|typecheck)|pnpm (test|lint|build)|yarn (test|lint|build)|tsc|eslint)\b/i;
-const STAGE_LABEL = ["Reading", "Editing", "Testing", "Done"];
+const STAGE_LABEL = ["Lendo", "Editando", "Testando", "Pronto"];
 const PROVIDER_NAME = { gemini: "Gemini", claude: "Claude" };
 const WX_ICON = { sun: Sun, moon: Moon, "sun-cloud": CloudSun, "moon-cloud": CloudMoon, cloud: Cloud, fog: CloudFog, drizzle: CloudDrizzle, rain: CloudRain, snow: CloudSnow, storm: CloudLightning };
 function locIsoHour(tz, date) {
@@ -281,7 +281,7 @@ export default function KonIsland() {
   const done = claude.status === "done";
   const claudeElapsed = claude.startedAt ? Math.max(0, Math.floor(((done ? claude.doneAt : now.getTime()) - claude.startedAt) / 1000)) : 0;
   const claudeRecent = done && now.getTime() - claude.doneAt < 12000;
-  const claudeLabel = done ? "Done" : claude.note ? "Needs you" : claudeRunning ? STAGE_LABEL[claude.stage] : "Idle";
+  const claudeLabel = done ? "Pronto" : claude.note ? "Precisa de você" : claudeRunning ? STAGE_LABEL[claude.stage] : "Parado";
 
   /* ─── Localização ativa ─── */
   const loc = locId === "auto"
@@ -462,9 +462,9 @@ export default function KonIsland() {
     if (name === "Stop") { sfx("done"); toast("Claude Code terminou a tarefa", "success", "check"); setTimeout(() => refreshUsage(), 1500); }
     if (name === "Notification") sfx("attention");
     setClaude((c) => {
-      const fresh = { status: "working", title: c.title || "Working…", file: "", removed: "", added: "", plus: 0, minus: 0, stage: 0, startedAt: t, doneAt: 0, note: "" };
+      const fresh = { status: "working", title: c.title || "Trabalhando…", file: "", removed: "", added: "", plus: 0, minus: 0, stage: 0, startedAt: t, doneAt: 0, note: "" };
       const base = c.status === "working" ? c : fresh;
-      if (name === "UserPromptSubmit") return { ...fresh, title: firstLine(ev.prompt).slice(0, 90) || "Working…" };
+      if (name === "UserPromptSubmit") return { ...fresh, title: firstLine(ev.prompt).slice(0, 90) || "Trabalhando…" };
       if (name === "PreToolUse") {
         const tool = ev.tool_name || "", inp = ev.tool_input || {};
         if (/^(Edit|MultiEdit|Write|NotebookEdit)$/.test(tool)) {
@@ -474,7 +474,7 @@ export default function KonIsland() {
         if (tool === "Bash" && TEST_RE.test(inp.command || "")) return { ...base, note: "", stage: Math.max(base.stage, 2) };
         return { ...base, note: "" };
       }
-      if (name === "Notification") return { ...base, note: ev.message || "Claude needs your input" };
+      if (name === "Notification") return { ...base, note: ev.message || "O Claude precisa de você" };
       if (name === "Stop") return c.status === "idle" ? c : { ...base, status: "done", stage: 3, doneAt: t, note: "" };
       return c;
     });
@@ -1213,11 +1213,11 @@ export default function KonIsland() {
         </div>
       </div>
       <div className={`${card} flex flex-col justify-between bg-[radial-gradient(ellipse_at_top_left,var(--tw-gradient-stops))] from-purple-950/60 to-neutral-950`}>
-        <span className="text-[10px] font-semibold tracking-[0.12em] text-purple-200/70">FOCUS</span>
+        <span className="text-[10px] font-semibold tracking-[0.12em] text-purple-200/70">FOCO</span>
         <div className="flex items-end justify-between">
           <div>
             <div className="font-mono tabular-nums text-[26px] font-semibold tracking-tight leading-none">{fmt(remaining)}</div>
-            <div className="text-[12px] text-white/50 mt-1">{timerRunning ? "Running" : remaining === timerTotal ? "Ready" : "Paused"}</div>
+            <div className="text-[12px] text-white/50 mt-1">{timerRunning ? "Rodando" : remaining === timerTotal ? "Pronto" : "Pausado"}</div>
           </div>
           <motion.button whileTap={{ scale: 0.88 }} onClick={toggleTimer} className={`w-7 h-7 rounded-full grid place-items-center text-white ${glassBtn} bg-white/[0.12]`}>
             {timerRunning ? <Pause size={12} fill="currentColor" /> : <Play size={12} fill="currentColor" className="ml-0.5" />}
@@ -1337,12 +1337,12 @@ export default function KonIsland() {
     <div className="relative h-full flex items-center justify-between px-3">
       <div className="pointer-events-none absolute -left-12 -top-12 w-60 h-60 rounded-full bg-sky-500/20 blur-3xl" />
       <div className="relative">
-        <div className="text-[10px] font-semibold tracking-[0.12em] text-sky-200/70">WATER</div>
+        <div className="text-[10px] font-semibold tracking-[0.12em] text-sky-200/70">ÁGUA</div>
         <div className="flex items-baseline gap-1.5 mt-1">
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.span key={water} {...FADE} className="text-[44px] font-semibold tabular-nums leading-none tracking-tight">{water}</motion.span>
           </AnimatePresence>
-          <span className="text-white/45 text-[15px]">/ 8 glasses</span>
+          <span className="text-white/45 text-[15px]">/ 8 copos</span>
         </div>
         <div className="text-[12px] text-white/45 mt-1 tabular-nums">{fmtNum(water * 250)} ml of 2.000 ml</div>
         <div className="flex gap-1.5 mt-3">
@@ -1479,7 +1479,7 @@ export default function KonIsland() {
   const TodoTab = (
     <div className="h-full grid grid-cols-[22fr_43fr_35fr] gap-3 px-4 pt-3 pb-1">
       <div className="flex flex-col min-w-0">
-        <div className="text-[15px] font-bold tracking-tight">Todo<span className="text-[#22c55e]" style={{ textShadow: "0 0 10px rgba(34,197,94,.6)" }}>List</span></div>
+        <div className="text-[15px] font-bold tracking-tight">Tarefas<span className="text-[#22c55e]" style={{ textShadow: "0 0 10px rgba(34,197,94,.6)" }}></span></div>
         <div className="flex items-center gap-2 mt-2">
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.span key={`${tasksDone}/${tasks.length}`} {...FADE} className="text-[30px] font-semibold tabular-nums tracking-tight leading-none">{tasksDone}/{tasks.length}</motion.span>
@@ -1488,8 +1488,8 @@ export default function KonIsland() {
         </div>
         <div className="text-[12px] text-white/45 mt-1">{DAYS_T[now.getDay()]}, {now.getDate()} {MONTHS_T[now.getMonth()]}</div>
         <div className="mt-auto flex flex-col gap-1.5">
-          <PillBtn onClick={startAdding} className="justify-center bg-[#22c55e]/15 text-[#4ade80] hover:bg-[#22c55e]/25"><Plus size={12} strokeWidth={2.6} /> Add Task</PillBtn>
-          <PillBtn onClick={() => setEditing((e) => !e)} className={`justify-center ${editing ? "bg-white text-black hover:bg-white" : ""}`}><Pencil size={11} /> {editing ? "Done" : "Edit Task"}</PillBtn>
+          <PillBtn onClick={startAdding} className="justify-center bg-[#22c55e]/15 text-[#4ade80] hover:bg-[#22c55e]/25"><Plus size={12} strokeWidth={2.6} /> Nova tarefa</PillBtn>
+          <PillBtn onClick={() => setEditing((e) => !e)} className={`justify-center ${editing ? "bg-white text-black hover:bg-white" : ""}`}><Pencil size={11} /> {editing ? "Pronto" : "Editar tarefas"}</PillBtn>
         </div>
       </div>
       <div className="flex flex-col min-h-0">
@@ -1502,7 +1502,7 @@ export default function KonIsland() {
               <motion.div key="adder" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
                 className="flex items-center gap-2 bg-white/[0.08] rounded-lg px-3 py-1.5 ring-1 ring-[#22c55e]/40">
                 <span className="w-[14px] h-[14px] rounded-full border-[1.5px] border-[#22c55e]/70 shrink-0" />
-                <input ref={addInputRef} value={newTask} onChange={(e) => setNewTask(e.target.value)} placeholder="New task, Enter to add"
+                <input ref={addInputRef} value={newTask} onChange={(e) => setNewTask(e.target.value)} placeholder="Nova tarefa — Enter para adicionar"
                   onKeyDown={(e) => { if (e.key === "Enter") addTask(); if (e.key === "Escape") { e.stopPropagation(); setAdding(false); } }}
                   onBlur={addTask} className="flex-1 min-w-0 bg-transparent outline-none text-[12.5px] placeholder:text-white/35" />
               </motion.div>
@@ -1542,7 +1542,7 @@ export default function KonIsland() {
             {["week", "month"].map((v) => (
               <button key={v} onClick={() => setCalView(v)} className={`relative px-2 rounded-full capitalize ${calView === v ? "text-black" : "text-white/55"}`}>
                 {calView === v && <motion.span layoutId="calPill" className="absolute inset-0 rounded-full bg-white" transition={SPRING} />}
-                <span className="relative">{v}</span>
+                <span className="relative">{v === "week" ? "Semana" : "Mês"}</span>
               </button>
             ))}
           </div>
@@ -1610,11 +1610,11 @@ export default function KonIsland() {
         </AnimatePresence>
       </div>
       <div className="relative flex flex-col justify-between pl-2 pr-1">
-        <div className="text-[14px] font-semibold tracking-tight text-white truncate" title={claude.note || claude.title}>{claude.note || claude.title || (hooksOn ? "Waiting for Claude Code…" : REAL ? "Connect Claude Code in Settings" : "Claude Code monitor (desktop app)")}</div>
+        <div className="text-[14px] font-semibold tracking-tight text-white truncate" title={claude.note || claude.title}>{claude.note || claude.title || (hooksOn ? "Esperando o Claude Code…" : REAL ? "Conecte o Claude Code em Ajustes" : "Claude Code monitor (desktop app)")}</div>
         <div className="relative bg-black/60 border border-white/10 rounded-xl overflow-hidden">
-          {privacy && <div className="absolute inset-0 z-10 flex items-center justify-center gap-1.5 text-[11px] font-medium text-white/60 backdrop-blur-md bg-black/30"><EyeOff size={13} /> Hidden by Privacy mode</div>}
+          {privacy && <div className="absolute inset-0 z-10 flex items-center justify-center gap-1.5 text-[11px] font-medium text-white/60 backdrop-blur-md bg-black/30"><EyeOff size={13} /> Oculto pelo modo privacidade</div>}
           <div className="flex items-center justify-between px-3 h-6 border-b border-white/[0.06] text-[10px] font-semibold tracking-[0.1em]">
-            <span className="text-white/50 truncate pr-2">{claude.file || "NO FILE YET"}</span>
+            <span className="text-white/50 truncate pr-2">{claude.file || "NENHUM ARQUIVO AINDA"}</span>
             <span className="font-mono tabular-nums shrink-0"><span className="text-emerald-400">+{claude.plus}</span> <span className="text-red-400">-{claude.minus}</span></span>
           </div>
           <div className="py-1 font-mono tabular-nums text-[12px] leading-[20px]">
@@ -1783,16 +1783,16 @@ export default function KonIsland() {
           <Switch on={dnd} onChange={setDnd} color="#6366f1" />
         </div>
         <div>
-          <div className="text-[16px] font-semibold tracking-tight">Do Not Disturb</div>
-          <div className="text-[12px] text-white/50 mt-0.5 leading-snug">{dnd ? "On — volume HUD is silenced" : "Off — Live Activities can pop up"}</div>
+          <div className="text-[16px] font-semibold tracking-tight">Não incomodar</div>
+          <div className="text-[12px] text-white/50 mt-0.5 leading-snug">{dnd ? "Ligado — avisos do notch em silêncio" : "Desligado — o notch pode mostrar avisos"}</div>
         </div>
       </div>
       <div className={`${card} flex flex-col justify-between bg-white/[0.03]`}>
         <div className="flex items-center justify-between">
-          <span className="text-[10px] font-semibold tracking-[0.12em] text-indigo-200/70">SLEEP TIMER</span>
-          <span className="text-[11px] text-white/40">Pauses the music</span>
+          <span className="text-[10px] font-semibold tracking-[0.12em] text-indigo-200/70">TIMER PARA DORMIR</span>
+          <span className="text-[11px] text-white/40">Pausa a música</span>
         </div>
-        <div className="font-mono tabular-nums text-[30px] font-semibold tracking-tight leading-none">{sleepLeft === null ? <span className="text-white/35">Off</span> : fmt(sleepLeft)}</div>
+        <div className="font-mono tabular-nums text-[30px] font-semibold tracking-tight leading-none">{sleepLeft === null ? <span className="text-white/35">Desligado</span> : fmt(sleepLeft)}</div>
         <div className="flex gap-1.5">
           {[null, 15, 30, 45, 60].map((m) => {
             const left = sleepLeft === null ? null : Math.ceil(sleepLeft / 60);
@@ -1800,7 +1800,7 @@ export default function KonIsland() {
             return (
               <motion.button key={String(m)} whileTap={{ scale: 0.9 }} onClick={() => setSleepLeft(m === null ? null : m * 60)}
                 className={`flex-1 h-7 rounded-full text-[11.5px] font-medium transition-colors ${active ? "bg-white text-black" : "bg-white/10 text-white/80 hover:bg-white/15"}`}>
-                {m === null ? "Off" : `${m}m`}
+                {m === null ? "Não" : `${m} min`}
               </motion.button>
             );
           })}
@@ -1822,8 +1822,8 @@ export default function KonIsland() {
           <Switch on={locked} onChange={setLocked} color="#f59e0b" />
         </div>
         <div>
-          <div className="text-[16px] font-semibold tracking-tight">{locked ? "Island locked" : "Lock island"}</div>
-          <div className="text-[12px] text-white/50 mt-0.5 leading-snug">{locked ? "Hover won't expand. Use Ctrl+Alt+E or the tray icon." : "Stop hover from expanding the panel"}</div>
+          <div className="text-[16px] font-semibold tracking-tight">{locked ? "Ilha travada" : "Travar a ilha"}</div>
+          <div className="text-[12px] text-white/50 mt-0.5 leading-snug">{locked ? "Passar o mouse não abre. Use Ctrl+Alt+E ou o ícone perto do relógio." : "O painel não abre ao passar o mouse"}</div>
         </div>
       </div>
       <div onClick={() => setPrivacy((v) => !v)} className={`${card} cursor-pointer flex flex-col justify-between bg-white/[0.03]`}>
@@ -1832,8 +1832,8 @@ export default function KonIsland() {
           <Switch on={privacy} onChange={setPrivacy} color="#0ea5e9" />
         </div>
         <div>
-          <div className="text-[16px] font-semibold tracking-tight">Privacy mode</div>
-          <div className="text-[12px] text-white/50 mt-0.5 leading-snug">Hide lyrics and code from Live Activities</div>
+          <div className="text-[16px] font-semibold tracking-tight">Modo privacidade</div>
+          <div className="text-[12px] text-white/50 mt-0.5 leading-snug">Esconde letras e código dos avisos do notch</div>
         </div>
       </div>
     </div>
@@ -1982,8 +1982,8 @@ export default function KonIsland() {
 
   const TABS = { home: HomeTab, files: FilesTab, clip: ClipTab, quick: QuickTab, system: SystemTab, music: MusicTab, focus: FocusTab, water: WaterTab, weather: WeatherTab, todo: TodoTab, claude: ClaudeTab, sleep: SleepTab, lock: LockTab };
   const UTIL = [
-    { id: "sleep", nav: "SLEEP", Icon: Moon, on: dnd || sleepLeft !== null, color: "text-indigo-300" },
-    { id: "lock", nav: "LOCK", Icon: locked ? Lock : LockOpen, on: locked || privacy, color: "text-amber-300" },
+    { id: "sleep", nav: "DESCANSO", Icon: Moon, on: dnd || sleepLeft !== null, color: "text-indigo-300" },
+    { id: "lock", nav: "TRAVAR", Icon: locked ? Lock : LockOpen, on: locked || privacy, color: "text-amber-300" },
   ];
   const navButton = ({ id, nav, Icon, on, color }) => {
     const active = tab === id;
@@ -2022,7 +2022,7 @@ export default function KonIsland() {
         </AnimatePresence>
       </div>
       <div className="h-[46px] shrink-0 flex items-center justify-between px-4">
-        <button onClick={() => { openTab("todo"); startAdding(); }} title="Quick add task" className={`w-7 h-7 rounded-full grid place-items-center text-white/70 ${glassBtn}`}><Plus size={14} /></button>
+        <button onClick={() => { openTab("todo"); startAdding(); }} title="Nova tarefa rápida" className={`w-7 h-7 rounded-full grid place-items-center text-white/70 ${glassBtn}`}><Plus size={14} /></button>
         <div className="flex items-center gap-0.5">
           {visiblePages.map((id) => navButton({ id, ...PAGE_META[id] }))}
           <span className="w-px h-4 bg-white/10 mx-1" />
@@ -2147,7 +2147,7 @@ export default function KonIsland() {
   const TranslateView = (
     <div className="absolute top-0 left-0 right-0 mx-auto flex flex-col px-4" style={{ width: 560, height: 250 }}>
       <div className="h-[44px] shrink-0 flex items-center justify-between">
-        <div className="flex items-center gap-2.5"><Eyes mood={tStatus === "translating" ? "working" : tStatus === "done" ? "done" : tStatus === "error" ? "attention" : "idle"} /><span className="text-[14px] font-semibold tracking-tight">Translate</span></div>
+        <div className="flex items-center gap-2.5"><Eyes mood={tStatus === "translating" ? "working" : tStatus === "done" ? "done" : tStatus === "error" ? "attention" : "idle"} /><span className="text-[14px] font-semibold tracking-tight">Traduzir</span></div>
         <div className="flex items-center gap-1.5">
           <span className="w-7 h-7 rounded-full grid place-items-center bg-blue-500 text-white shadow-[0_0_12px_rgba(59,130,246,.7)]"><Languages size={14} /></span>
           <button onClick={toCompact} className="w-7 h-7 rounded-full grid place-items-center text-white/50 hover:text-white hover:bg-white/10"><X size={15} /></button>

@@ -321,7 +321,7 @@ function Invoke-Procs($c) {
       $agg[$n].cpu += $delta; $agg[$n].mem += $p.WorkingSet64
     }
     $script:procAt = $now
-    $top = @($agg.Values | ForEach-Object { @{ name = $_.name; cpu = [Math]::Round(100 * $_.cpu / $secs / $cores, 1); mem = [Math]::Round($_.mem / 1MB) } } | Sort-Object { -$_.cpu } | Select-Object -First 4)
+    $top = @($agg.Values | ForEach-Object { @{ name = $_.name; cpu = [Math]::Round(100 * $_.cpu / $secs / $cores, 1); mem = [Math]::Round($_.mem / 1MB) } } | Sort-Object @{ Expression = { $_.cpu }; Descending = $true }, @{ Expression = { $_.mem }; Descending = $true } | Select-Object -First 4) # empate (1ª leitura, tudo 0%): os que mais usam memória
     $topMem = @($agg.Values | Sort-Object { -$_.mem } | Select-Object -First 1 | ForEach-Object { @{ name = $_.name; mem = [Math]::Round($_.mem / 1MB) } })
     Emit @{ type = 'procs'; id = $c.id; top = $top; topMem = $topMem }
   } catch { Emit @{ type = 'procs'; id = $c.id; top = @(); error = $_.Exception.Message } }
