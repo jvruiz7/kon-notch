@@ -57,3 +57,5 @@ pub const FILE_AUDIO: char = '\u{e55e}';
 pub const FILE_ARCHIVE: char = '\u{e30d}';
 pub const FILE_CODE: char = '\u{e0c3}';
 pub const FOLDER: char = '\u{e0d7}';
+pub const TERMINAL: char = '\u{e181}';
+pub const SHIELD_CHECK: char = '\u{e1ff}';

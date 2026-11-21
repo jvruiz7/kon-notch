@@ -1,6 +1,7 @@
 //! Kon nativo: o notch do Windows escrito em Rust, desenhado pela placa de vídeo, sem motor web.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod claude;
 mod clipboard;
 mod icons;
 mod media;
