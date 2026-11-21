@@ -32,6 +32,20 @@ for px in range(330, 925, 7):
         shot("ajustes"); key("Escape"); time.sleep(0.4)
     if "Ask" in after:
         shot("perguntar"); key("Escape"); time.sleep(0.4); click(600, 20); time.sleep(0.6)
+# lembrete falado: pede pelo Perguntar e espera o cartão aparecer sozinho
+click(900, 252); time.sleep(0.6)
+w = subprocess.run(["xdotool", "search", "--name", "Kon"], env=env, capture_output=True, text=True).stdout.split()
+if w: x("windowfocus", w[0]); time.sleep(0.2)
+x("type", "--delay", "25", "me lembra daqui a 3 seg de testar o Kon"); x("key", "Return"); time.sleep(0.8)
+shot("lembrete_combinado"); key("Escape"); time.sleep(4)
+shot("lembrete_cartao")
+logtxt = open("/tmp/kon-clicks.log").read()
+if "view=Remind" not in logtxt: fails.append("o lembrete não apareceu na hora")
+else:
+    click(600 + 470 // 2 - 40, 12 + 42 - 12)  # botão Ok, à direita do cartão
+    time.sleep(0.8)
+    views = [l for l in open("/tmp/kon-clicks.log").read().splitlines() if l.startswith("view=")]
+    if not views or not views[-1].startswith("view=Compact"): fails.append("o botão Ok não fechou o lembrete")
 pages = ["home"] + [p for v, p in seen if v == "Panel"]
 want = ["home", "files", "clip", "music", "weather", "focus", "todo", "claude", "quick", "system", "water", "sleep", "lock"]
 for w in want:
@@ -43,4 +57,4 @@ app.terminate(); xv.terminate()
 if not alive: fails.append("o app não está mais rodando")
 print("visto:", seen)
 if fails: print("FALHOU:\n- " + "\n- ".join(fails)); sys.exit(1)
-print("OK: todas as páginas, Ajustes e Perguntar abriram com cliques reais")
+print("OK: todas as páginas, Ajustes, Perguntar e o lembrete funcionaram com cliques reais")

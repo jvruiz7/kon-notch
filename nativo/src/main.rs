@@ -14,6 +14,7 @@ mod usage;
 mod weather;
 mod platform;
 mod quick;
+mod reminders;
 mod secrets;
 mod settings;
 mod stash;

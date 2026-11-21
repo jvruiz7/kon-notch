@@ -13,6 +13,7 @@ ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 iana-time-zone = "0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp"] }
 sysinfo = { version = "0.37", default-features = false, features = ["system", "disk"] }
+regex-lite = "0.1"
 arboard = { version = "3", default-features = false }
 
 [target.'cfg(windows)'.dependencies]

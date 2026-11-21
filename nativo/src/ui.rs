@@ -12,6 +12,7 @@ use crate::clipboard;
 use crate::ai;
 use crate::hotkeys::{self, Hot};
 use crate::secrets;
+use crate::reminders::{self, Rem};
 use crate::translate as tr;
 use crate::inuse::{self, InUse};
 use crate::usage;
@@ -22,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use eframe::egui::{self, pos2, vec2, emath, Align, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use chrono::TimeZone as _;
 
 const WIN_W: f32 = 820.0;
 const COMPACT: Vec2 = Vec2::new(168.0, 32.0);
@@ -34,7 +36,7 @@ const DAYS: [&str; 7] = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum View { Compact, Panel, Perm, Sheet, Ask, Translate, TextAct }
+enum View { Compact, Panel, Perm, Sheet, Ask, Translate, TextAct, Remind }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Sleep, Lock, Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
@@ -124,6 +126,8 @@ pub struct KonApp {
     model_in: [String; 2],
     copied_at: Option<Instant>,
     dbg_last: String,
+    rems: Vec<Rem>,
+    due: Vec<Rem>,
     tr: Arc<Mutex<Tr>>,
     ta: Arc<Mutex<TextAct>>,
     art: Option<(String, egui::TextureHandle)>,
@@ -165,7 +169,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -177,6 +181,7 @@ impl KonApp {
             View::Perm => vec2(470.0, 100.0),
             View::Sheet => vec2(440.0, 470.0),
             View::Translate => vec2(560.0, 250.0),
+            View::Remind => vec2(470.0, 84.0),
             View::TextAct => {
                 let t = self.ta.lock().unwrap();
                 vec2(540.0, if !t.error.is_empty() { 52.0 } else { match t.status { 0 => 98.0, 1 => 120.0, _ => (128.0 + ((t.result.chars().count() as f32 / 70.0).ceil() + t.result.matches('\n').count() as f32).min(6.0) * 18.0).min(250.0) } })
@@ -254,6 +259,10 @@ impl eframe::App for KonApp {
         let has_perm = !self.claude.lock().unwrap().perms.is_empty();
         if has_perm && self.view != View::Perm { self.view = View::Perm; }
         if !has_perm && self.view == View::Perm { self.view = View::Compact; }
+        // lembretes: dispara os que venceram e mostra o cartão (depois dos pedidos do Claude)
+        self.reminder_tick(ctx);
+        if !has_perm && !self.due.is_empty() && matches!(self.view, View::Compact) { self.view = View::Remind; }
+        if self.due.is_empty() && self.view == View::Remind { self.view = View::Compact; }
         // arquivos arrastados até a ilha: abre a gaveta e guarda ao soltar
         let (hovering_files, dropped) = ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>()));
         if hovering_files && self.page != Page::Files { self.drop_back = Some(self.page); self.page = Page::Files; self.view = View::Panel; self.stash.refresh_missing(); }
@@ -265,7 +274,7 @@ impl eframe::App for KonApp {
         // abrir ao passar o mouse (com um respiro de 90 ms) e fechar ao sair (280 ms de tolerância)
         if inside {
             self.leave_since = None;
-            if self.view == View::Compact && self.settings.open_mode != "click" && !has_perm && !self.settings.locked {
+            if self.view == View::Compact && self.settings.open_mode != "click" && !has_perm && self.due.is_empty() && !self.settings.locked {
                 let t = *self.hover_since.get_or_insert(now);
                 if now - t > Duration::from_millis(if self.settings.open_mode == "delay" { 450 } else { 110 }) { self.view = View::Panel; }
             }
@@ -326,13 +335,15 @@ impl eframe::App for KonApp {
                 ui.painter().rect_stroke(rect, CornerRadius::same(rad), Stroke::new(1.0_f32, Color32::from_white_alpha(31)), egui::StrokeKind::Inside);
             } else { draw_island(ui.painter(), rect, self.view); }
             let open = ((self.h.v - COMPACT.y) / (PANEL.y - COMPACT.y)).clamp(0.0, 1.0);
-            if self.view == View::Perm || (self.w.v > 400.0 && self.h.v < 120.0) {
+            if self.view == View::Remind {}
+            else if self.view == View::Perm || (self.w.v > 400.0 && self.h.v < 120.0) {
                 let a = ((self.h.v - COMPACT.y) / (100.0 - COMPACT.y)).clamp(0.0, 1.0);
                 if self.view == View::Perm && a > 0.6 { self.draw_perm(ui, rect, blink, (a - 0.6) / 0.4); }
             } else if open < 0.35 {
                 self.draw_compact(ui, rect, &m, blink, 1.0 - open / 0.35);
             }
-            if self.view == View::Translate { self.draw_translate(ui, rect, blink); }
+            if self.view == View::Remind { if self.h.v > 60.0 { self.draw_remind(ui, rect, blink); } }
+            else if self.view == View::Translate { self.draw_translate(ui, rect, blink); }
             else if self.view == View::TextAct { self.draw_textact(ui, rect, blink); }
             else if self.view == View::Ask {
                 self.draw_ask(ui, rect, blink);
@@ -551,6 +562,46 @@ impl KonApp {
     }
     fn visible_pages(&self) -> Vec<Page> {
         self.page_ids().iter().filter(|id| !self.settings.pages_off.contains(id)).map(|id| Page::from(id)).collect()
+    }
+
+    fn reminder_tick(&mut self, ctx: &egui::Context) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut changed = false;
+        for r in self.rems.iter_mut() {
+            if r.fired || r.at > now { continue; }
+            r.fired = true; changed = true;
+            if !self.due.iter().any(|d| d.id == r.id) { self.due.push(r.clone()); }
+        }
+        let before = self.rems.len();
+        self.rems.retain(|r| !r.fired || now - r.at < 86_400_000);
+        if changed || self.rems.len() != before { reminders::save(&self.rems); }
+        // acorda sozinho na hora do próximo lembrete
+        if let Some(next) = self.rems.iter().filter(|r| !r.fired).map(|r| r.at).min() {
+            ctx.request_repaint_after(Duration::from_millis(((next - now).max(0) as u64).min(60_000)));
+        }
+    }
+
+    fn draw_remind(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
+        let p = ui.painter().clone();
+        let Some(rem) = self.due.first().cloned() else { return };
+        draw_tofu_mood(&p, pos2(r.left() + 16.0 + 23.0, r.center().y), 1.45, blink, 1.0, true);
+        let x = r.left() + 16.0 + 46.0 + 12.0;
+        let mut rx = r.right() - 14.0;
+        let ok = small_pill(ui, &p, &mut rx, r.center().y, Some(ic::CHECK), "Ok", true, 1.0);
+        let snooze = small_pill(ui, &p, &mut rx, r.center().y, None, "Adiar 10 min", false, 1.0);
+        let maxw = rx - 8.0 - x;
+        p.text(pos2(x, r.center().y - 9.0), Align2::LEFT_CENTER, ellipsize_w(ui, &rem.text, 13.5, maxw), bold(13.5), Color32::WHITE);
+        let hm = chrono::Local.timestamp_millis_opt(rem.at).single().map_or(String::new(), |d| d.format("%H:%M").to_string());
+        let more = if self.due.len() > 1 { format!(" · +{}", self.due.len() - 1) } else { String::new() };
+        p.text(pos2(x, r.center().y + 9.0), Align2::LEFT_CENTER, format!("Lembrete das {hm}{more}"), FontId::proportional(11.0), Color32::from_white_alpha(140));
+        if ok || snooze {
+            self.due.remove(0);
+            if snooze {
+                if let Some(x) = self.rems.iter_mut().find(|x| x.id == rem.id) { x.at = chrono::Utc::now().timestamp_millis() + 10 * 60_000; x.fired = false; }
+                reminders::save(&self.rems);
+                self.ctoast = Some(("Adiado 10 min".into(), Instant::now(), false));
+            }
+        }
     }
 
     fn floating(&self) -> bool { matches!(self.view, View::Ask | View::Translate | View::TextAct) }
@@ -818,6 +869,15 @@ impl KonApp {
         let q = self.ask_q.trim().to_string();
         if q.is_empty() { return; }
         self.ask_q.clear();
+        if let Some((text, at)) = reminders::parse(&q, chrono::Local::now()) {
+            let id = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
+            self.rems.push(Rem { id, text: text.chars().take(200).collect(), at, fired: false });
+            reminders::save(&self.rems);
+            let mut g = self.ask.lock().unwrap();
+            let n = g.id + 1;
+            *g = ai::Ask { id: n, phase: ai::Phase::Done, question: q, answer: format!("Combinado: {} eu te aviso no notch.\n{text}", reminders::describe(at, chrono::Local::now())), ..Default::default() };
+            return;
+        }
         let pv = self.settings.provider.clone();
         let req = ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: pv == "gemini" && self.settings.web_search, provider: pv, system: ai::SYSTEM.into() };
         let c = ctx.clone();
@@ -1923,6 +1983,29 @@ impl KonApp {
             else { self.adding = Some(text); }
             y += row_h + 4.0;
         }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut rem_items: Vec<Rem> = self.rems.iter().filter(|r| !r.fired && r.at - now_ms < 36 * 3_600_000).cloned().collect();
+        rem_items.sort_by_key(|r| r.at);
+        let mut rem_del = None;
+        for rm in &rem_items {
+            if y + row_h > mid.bottom() { break; }
+            let rr = Rect::from_min_size(pos2(mid.left(), y), vec2(mid.width(), row_h));
+            p.rect_filled(rr, CornerRadius::same(8), fade(Color32::from_white_alpha(12), alpha));
+            p.text(pos2(rr.left() + 14.0, rr.center().y), Align2::CENTER_CENTER, ic::BELL, icon_font(13.0), fade(Color32::from_rgb(252, 211, 77), alpha));
+            let d = chrono::Local.timestamp_millis_opt(rm.at).single();
+            let tm = d.map_or(String::new(), |d| if d.date_naive() == chrono::Local::now().date_naive() { d.format("%H:%M").to_string() } else { format!("amanhã {}", d.format("%H:%M")) });
+            let right = if self.editing { rr.right() - 30.0 } else { rr.right() - 10.0 };
+            p.text(pos2(right, rr.center().y), Align2::RIGHT_CENTER, &tm, FontId::proportional(11.0), fade(Color32::from_white_alpha(128), alpha));
+            p.text(pos2(rr.left() + 28.0, rr.center().y), Align2::LEFT_CENTER, ellipsize_w(ui, &rm.text, 12.5, right - text_w(ui, &tm, 11.0) - 10.0 - rr.left() - 28.0), FontId::proportional(12.5), fade(Color32::from_white_alpha(230), alpha));
+            if self.editing {
+                let del = Rect::from_center_size(pos2(rr.right() - 14.0, rr.center().y), vec2(22.0, 22.0));
+                let rd = ui.interact(del, ui.id().with(("remdel", rm.id)), Sense::click());
+                p.text(del.center(), Align2::CENTER_CENTER, ic::TRASH_2, icon_font(12.0), fade(if rd.hovered() { Color32::from_rgb(248, 113, 113) } else { Color32::from_white_alpha(110) }, alpha));
+                if rd.clicked() { rem_del = Some(rm.id); }
+            }
+            y += row_h + 4.0;
+        }
+        if let Some(id) = rem_del { self.rems.retain(|r| r.id != id); reminders::save(&self.rems); }
         let mut toggle_id = None; let mut remove_id = None;
         for t in self.tasks.list.iter() {
             if y + row_h > mid.bottom() { break; }
@@ -1931,7 +2014,7 @@ impl KonApp {
             p.rect_filled(rr, CornerRadius::same(8), fade(Color32::from_white_alpha(if resp.hovered() { 22 } else { 12 }), alpha));
             let c = pos2(rr.left() + 14.0, rr.center().y);
             if t.done { p.circle_filled(c, 7.0, fade(green, alpha)); p.text(c, Align2::CENTER_CENTER, ic::CHECK, icon_font(9.0), fade(Color32::BLACK, alpha)); }
-            else { p.circle_stroke(c, 6.5, Stroke::new(1.5_f32, fade(Color32::from_white_alpha(110), alpha))); }
+            else { p.circle_stroke(c, 6.25, Stroke::new(1.5_f32, fade(Color32::from_rgb(59, 130, 246), alpha))); }
             let tc = if t.done { Color32::from_white_alpha(90) } else { Color32::WHITE };
             let txt = ellipsize(&t.text, 34);
             let g = p.layout_no_wrap(txt, FontId::proportional(12.5), fade(tc, alpha));

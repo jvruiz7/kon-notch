@@ -73,3 +73,4 @@ pub const GLOBE: char = '\u{e0e8}';
 pub const SQUARE: char = '\u{e167}';
 pub const LANGUAGES: char = '\u{e0fe}';
 pub const ARROW_LEFT_RIGHT: char = '\u{e24a}';
+pub const BELL: char = '\u{e059}';
