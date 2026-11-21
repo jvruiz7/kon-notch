@@ -480,12 +480,26 @@ fn toggle(ui: &mut egui::Ui, p: &egui::Painter, c: Pos2, on: bool, a: f32) -> eg
     resp
 }
 
+/// Mesmas fontes do Kon atual: no Windows, Segoe UI Variable / Segoe UI e Cascadia Mono (lidas da pasta de
+/// fontes do sistema, não embutidas). Fora do Windows, ou se faltarem, usa a Inter embutida.
 fn install_fonts(ctx: &egui::Context) {
+    fn sys(names: &[&str]) -> Option<Vec<u8>> {
+        let dir = std::env::var_os("WINDIR").map(std::path::PathBuf::from)?.join("Fonts");
+        names.iter().find_map(|n| std::fs::read(dir.join(n)).ok())
+    }
     let mut f = egui::FontDefinitions::default();
-    f.font_data.insert("inter".into(), Arc::new(egui::FontData::from_static(include_bytes!("../assets/Inter-Medium.otf"))));
-    f.font_data.insert("inter-bold".into(), Arc::new(egui::FontData::from_static(include_bytes!("../assets/Inter-Bold.otf"))));
-    f.families.entry(FontFamily::Proportional).or_default().insert(0, "inter".into());
-    let mut b = vec!["inter-bold".to_string()];
+    let regular = sys(&["SegUIVar.ttf", "segoeui.ttf"]).map(egui::FontData::from_owned)
+        .unwrap_or_else(|| egui::FontData::from_static(include_bytes!("../assets/Inter-Medium.otf")));
+    let semibold = sys(&["seguisb.ttf", "segoeuib.ttf"]).map(egui::FontData::from_owned)
+        .unwrap_or_else(|| egui::FontData::from_static(include_bytes!("../assets/Inter-Bold.otf")));
+    f.font_data.insert("kon".into(), Arc::new(regular));
+    f.font_data.insert("kon-bold".into(), Arc::new(semibold));
+    f.families.entry(FontFamily::Proportional).or_default().insert(0, "kon".into());
+    if let Some(m) = sys(&["CascadiaMono.ttf", "consola.ttf"]) {
+        f.font_data.insert("kon-mono".into(), Arc::new(egui::FontData::from_owned(m)));
+        f.families.entry(FontFamily::Monospace).or_default().insert(0, "kon-mono".into());
+    }
+    let mut b = vec!["kon-bold".to_string()];
     b.extend(f.families.get(&FontFamily::Proportional).cloned().unwrap_or_default());
     f.families.insert(FontFamily::Name("bold".into()), b);
     ctx.set_fonts(f);
