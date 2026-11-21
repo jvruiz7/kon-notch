@@ -8,6 +8,7 @@ mod media;
 mod tasks;
 mod weather;
 mod platform;
+mod quick;
 mod settings;
 mod stash;
 mod system;

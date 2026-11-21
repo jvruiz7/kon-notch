@@ -9,6 +9,7 @@ use crate::tasks::Tasks;
 use crate::weather::{self, Weather};
 use crate::system::{self, SysInfo};
 use crate::clipboard;
+use crate::quick::{self, Quick};
 use crate::claude::{self, Status as CStatus};
 use crate::stash::{self, Stash};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const WIN_W: f32 = 820.0;
-const COMPACT: Vec2 = Vec2::new(196.0, 34.0);
-const COMPACT_MUSIC: Vec2 = Vec2::new(300.0, 34.0);
+const COMPACT: Vec2 = Vec2::new(168.0, 32.0);
+const COMPACT_MUSIC: Vec2 = Vec2::new(250.0, 36.0);
 const PANEL: Vec2 = Vec2::new(660.0, 278.0);
 const BG: Color32 = Color32::from_rgb(0, 0, 0);
 const CARD: Color32 = Color32::from_rgb(20, 20, 22);
@@ -30,13 +31,13 @@ const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AG
 enum View { Compact, Panel, Perm }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Page { Home, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
+enum Page { Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
 
 impl Page {
-    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Clip => "clip", Page::Files => "files", Page::Claude => "claude", Page::System => "system", Page::Settings => "settings" } }
-    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "clip" => Page::Clip, "files" => Page::Files, "claude" => Page::Claude, "system" => Page::System, _ => Page::Home } }
-    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Clip => "CLIPS", Page::Files => "ARQUIVOS", Page::Claude => "CLAUDE", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
-    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Clip => ic::CLIPBOARD_LIST, Page::Files => ic::FOLDER_OPEN, Page::Claude => ic::ASTERISK, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
+    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Clip => "clip", Page::Files => "files", Page::Claude => "claude", Page::Quick => "quick", Page::Water => "water", Page::System => "system", Page::Settings => "settings" } }
+    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "clip" => Page::Clip, "files" => Page::Files, "claude" => Page::Claude, "quick" => Page::Quick, "water" => Page::Water, "system" => Page::System, _ => Page::Home } }
+    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Clip => "CLIPS", Page::Files => "ARQUIVOS", Page::Claude => "CLAUDE", Page::Quick => "ATALHOS", Page::Water => "ÁGUA", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
+    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Clip => ic::CLIPBOARD_LIST, Page::Files => ic::FOLDER_OPEN, Page::Claude => ic::ASTERISK, Page::Quick => ic::ZAP, Page::Water => ic::GLASS_WATER, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
     /// cor do ícone "ligado" (mesmas do Kon atual)
     fn color(self) -> Color32 { match self { Page::Music => Color32::from_rgb(244, 114, 182), Page::Weather => Color32::from_rgb(56, 189, 248), Page::Focus => Color32::from_rgb(255, 107, 91), Page::Todo => Color32::from_rgb(163, 230, 53), _ => Color32::from_rgb(251, 146, 60) } }
 }
@@ -89,6 +90,11 @@ pub struct KonApp {
     files_scroll: f32,
     drop_back: Option<Page>,
     toast_msg: Option<(String, Instant)>,
+    ctoast: Option<(String, Instant, bool)>,
+    quick: Vec<Quick>,
+    qform: Option<(String, String, String)>, // tipo, alvo, nome
+    qedit: bool,
+    sys_alerts: Arc<AtomicBool>,
     art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
@@ -110,7 +116,8 @@ impl KonApp {
         let ctx3 = cc.egui_ctx.clone();
         let ctx4 = cc.egui_ctx.clone();
         let clips = clipboard::start(settings.clipboard_on, move || ctx4.request_repaint());
-        let sys = system::start(sys_on.clone(), move || ctx3.request_repaint());
+        let sys_alerts = Arc::new(AtomicBool::new(settings.sys_alerts));
+        let sys = system::start(sys_on.clone(), sys_alerts.clone(), move || ctx3.request_repaint());
         let hit = Arc::new(Mutex::new(Hit { ppp: 1.0, ..Default::default() }));
         spawn_cursor_watch(cc.egui_ctx.clone(), hit.clone());
         let mins = settings.focus_minutes.clamp(1, 180);
@@ -126,7 +133,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(true, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(true, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -136,7 +143,7 @@ impl KonApp {
         match self.view {
             View::Panel => PANEL,
             View::Perm => vec2(470.0, 100.0),
-            View::Compact => if self.claude_busy() { vec2(300.0, 36.0) } else if m.active && m.playing { COMPACT_MUSIC } else { COMPACT },
+            View::Compact => if let Some((t, _, _)) = self.ctoast.as_ref().filter(|c| c.1.elapsed() < Duration::from_secs(5)) { vec2((t.chars().count() as f32 * 6.6 + 78.0).clamp(220.0, 520.0), 36.0) } else if self.claude_busy() { vec2(300.0, 36.0) } else if m.active && m.playing { COMPACT_MUSIC } else { COMPACT },
         }
     }
 
@@ -222,9 +229,12 @@ impl eframe::App for KonApp {
         }
 
         // teclado só enquanto há um campo de texto aberto
-        let want_focus = self.adding.is_some() && self.view == View::Panel;
+        let want_focus = (self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel;
         if want_focus != self.focusable { self.focusable = want_focus; crate::platform::set_focusable(want_focus); }
-        if self.view == View::Compact { self.adding = None; self.editing = false; }
+        if self.view == View::Compact { self.adding = None; self.editing = false; self.qform = None; self.qedit = false; }
+        // aviso de PC sobrecarregado vindo da thread do sistema
+        if let Some(a) = self.sys.lock().unwrap().alert.take() { self.ctoast = Some((a, now, true)); }
+        if self.ctoast.as_ref().map_or(false, |c| c.1.elapsed() >= Duration::from_millis(5300)) { self.ctoast = None; }
 
         // ── animação do tamanho ──
         let target = self.target_size(&m);
@@ -277,6 +287,16 @@ impl KonApp {
     fn draw_compact(&mut self, ui: &mut egui::Ui, r: Rect, m: &MediaState, blink: bool, alpha: f32) {
         let p = ui.painter().clone();
         let p = &p;
+        if let Some((t, t0, err)) = self.ctoast.clone() {
+            if t0.elapsed() < Duration::from_secs(5) && self.view == View::Compact {
+                let col = if err { Color32::from_rgb(248, 113, 113) } else { Color32::from_rgb(74, 222, 128) };
+                draw_tofu(p, pos2(r.left() + 24.0, r.center().y), 0.75, blink, alpha);
+                p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, if err { ic::X } else { ic::CHECK }, icon_font(12.0), fade(col, alpha));
+                p.text(pos2(r.left() + 60.0, r.center().y), Align2::LEFT_CENTER, ellipsize_w(ui, &t, 12.0, r.width() - 74.0), bold(12.0), fade(Color32::WHITE, alpha));
+                ui.ctx().request_repaint_after(Duration::from_millis(200));
+                return;
+            }
+        }
         if self.claude_busy() && r.width() > COMPACT.x + 40.0 {
             let l = self.claude.lock().unwrap().live.clone();
             let done = l.status == CStatus::Done;
@@ -353,6 +373,8 @@ impl KonApp {
             Page::Clip => self.page_clip(ui, body, alpha),
             Page::Files => self.page_files(ui, body, alpha),
             Page::Claude => self.page_claude(ui, body, blink, alpha),
+            Page::Quick => self.page_quick(ui, body, alpha),
+            Page::Water => self.page_water(ui, body, alpha),
             Page::Weather => {}
             Page::Settings => self.page_settings(ui, body, alpha),
         }
@@ -361,7 +383,7 @@ impl KonApp {
 
     fn nav(&mut self, ui: &mut egui::Ui, bar: Rect, alpha: f32) {
         // mesma barra do Kon atual: "+" à esquerda, páginas no meio (a ativa vira pílula com nome), engrenagem à direita
-        let pages = [Page::Home, Page::Files, Page::Clip, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::Claude, Page::System];
+        let pages = [Page::Home, Page::Files, Page::Clip, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::Claude, Page::Quick, Page::System, Page::Water];
         let widths: Vec<f32> = pages.iter().map(|p| if *p == self.page { 30.0 + text_w(ui, p.label(), 10.5) } else { 28.0 }).collect();
         let total: f32 = widths.iter().sum::<f32>() + 2.0 * (pages.len() as f32 - 1.0);
         let mut x = bar.center().x - total / 2.0;
@@ -506,7 +528,7 @@ impl KonApp {
         let right = Rect::from_min_max(pos2(left.right() + 8.0, area.top()), area.max);
         // brilho âmbar no canto
         // brilho difuso (equivale ao blur-3xl do Kon atual)
-        let pc = p.with_clip_rect(body.expand2(vec2(16.0, 0.0)));
+        let pc = p.with_clip_rect(body.expand(16.0));
         for k in 0..14 { let rr = 90.0 - k as f32 * 6.0; pc.circle_filled(pos2(left.left() - 10.0, left.top() - 10.0), rr, fade(Color32::from_rgba_unmultiplied(245, 158, 11, 3), alpha)); }
         draw_tofu_mood(&p, pos2(left.center().x, left.top() + 34.0), 2.3, blink, alpha, !l.note.is_empty());
         p.text(pos2(left.center().x, left.center().y + 22.0), Align2::CENTER_CENTER, mmss(claude_elapsed(&l)), FontId::monospace(24.0), fade(Color32::WHITE, alpha));
@@ -649,7 +671,7 @@ impl KonApp {
             if resp.clicked() { clipboard::clear(&self.clips); }
             rx = r.left() - 8.0;
         }
-        if toggle(ui, &p, pos2(rx - 18.0, y0), on, alpha).clicked() {
+        if toggle_c(ui, &p, pos2(rx - 18.0, y0), on, alpha, teal).clicked() {
             clipboard::set_on(&self.clips, !on); self.settings.clipboard_on = !on; self.settings.save();
         }
         p.text(pos2(rx - 42.0, y0), Align2::RIGHT_CENTER, "Gravar", FontId::proportional(10.5), fade(Color32::from_white_alpha(115), alpha));
@@ -710,46 +732,208 @@ impl KonApp {
     fn page_system(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
         let s = self.sys.lock().unwrap().clone();
         let p = ui.painter().clone();
+        if s.mem_total == 0 { p.text(body.center(), Align2::CENTER_CENTER, "Lendo o sistema…", FontId::proportional(12.0), fade(Color32::from_white_alpha(115), alpha)); return; }
         let gap = 10.0;
-        let w1 = body.width() * 0.24; let w2 = body.width() * 0.24;
-        let c1 = Rect::from_min_size(body.min, vec2(w1, body.height()));
-        let col2 = Rect::from_min_size(pos2(c1.right() + gap, body.top()), vec2(w2, body.height()));
-        let m1 = Rect::from_min_size(col2.min, vec2(w2, (body.height() - gap) / 2.0));
-        let m2 = Rect::from_min_max(pos2(col2.left(), m1.bottom() + gap), col2.max);
-        let c3 = Rect::from_min_max(pos2(col2.right() + gap, body.top()), body.max);
-        for r in [c1, m1, m2, c3] { card(&p, r, Color32::from_white_alpha(8), alpha); }
-        // CPU
-        let rc = pos2(c1.center().x, c1.center().y - 12.0);
-        let green = Color32::from_rgb(52, 211, 153);
-        p.circle_stroke(rc, 30.0, Stroke::new(6.0_f32, fade(Color32::from_white_alpha(25), alpha)));
-        arc(&p, rc, 30.0, (s.cpu / 100.0).clamp(0.0, 1.0), Stroke::new(6.0_f32, fade(green, alpha)));
-        p.text(rc, Align2::CENTER_CENTER, format!("{:.0}%", s.cpu), bold(17.0), fade(Color32::WHITE, alpha));
-        p.text(pos2(c1.center().x, c1.bottom() - 26.0), Align2::CENTER_CENTER, format!("CPU · {} núcleos", s.cores), FontId::proportional(11.0), fade(Color32::from_white_alpha(115), alpha));
-        // memória e disco
-        let gb = |b: u64| b as f64 / 1_073_741_824.0;
-        let bar = |r: Rect, title: &str, frac: f32, sub: String, col: Color32| {
-            p.text(pos2(r.left() + 12.0, r.top() + 16.0), Align2::LEFT_CENTER, title, FontId::proportional(11.0), fade(Color32::from_white_alpha(150), alpha));
-            p.text(pos2(r.right() - 12.0, r.top() + 16.0), Align2::RIGHT_CENTER, format!("{:.0}%", frac * 100.0), bold(11.0), fade(Color32::WHITE, alpha));
-            let t = Rect::from_min_size(pos2(r.left() + 12.0, r.top() + 30.0), vec2(r.width() - 24.0, 4.0));
-            p.rect_filled(t, CornerRadius::same(2), fade(Color32::from_white_alpha(30), alpha));
-            p.rect_filled(Rect::from_min_size(t.min, vec2(t.width() * frac.clamp(0.0, 1.0), 4.0)), CornerRadius::same(2), fade(col, alpha));
-            p.text(pos2(r.left() + 12.0, r.top() + 48.0), Align2::LEFT_CENTER, sub, FontId::proportional(11.0), fade(Color32::from_white_alpha(115), alpha));
-        };
-        let mf = if s.mem_total > 0 { s.mem_used as f32 / s.mem_total as f32 } else { 0.0 };
-        bar(m1, "Memória", mf, format!("{:.1} de {:.1} GB", gb(s.mem_used), gb(s.mem_total)), green);
-        let df = if s.disk_total > 0 { 1.0 - s.disk_free as f32 / s.disk_total as f32 } else { 0.0 };
-        bar(m2, "Disco C:", df, format!("{:.1} GB livres", gb(s.disk_free)), Color32::from_rgb(251, 191, 36));
-        // mais pesados
-        p.text(pos2(c3.left() + 14.0, c3.top() + 18.0), Align2::LEFT_CENTER, "MAIS PESADOS AGORA", bold(10.0), fade(Color32::from_white_alpha(115), alpha));
-        p.text(pos2(c3.right() - 14.0, c3.top() + 18.0), Align2::RIGHT_CENTER, format!("ligado há {}h", s.uptime_h), FontId::proportional(10.5), fade(Color32::from_white_alpha(100), alpha));
-        for (i, pr) in s.top.iter().enumerate() {
-            let y = c3.top() + 44.0 + i as f32 * 22.0;
-            p.text(pos2(c3.left() + 14.0, y), Align2::LEFT_CENTER, ellipsize(&pr.name, 22), FontId::proportional(12.0), fade(Color32::WHITE, alpha));
-            let mem = if pr.mem_mb >= 1024 { format!("{:.1} GB", pr.mem_mb as f64 / 1024.0) } else { format!("{} MB", pr.mem_mb) };
-            p.text(pos2(c3.right() - 70.0, y), Align2::RIGHT_CENTER, mem, FontId::proportional(11.5), fade(Color32::from_white_alpha(140), alpha));
-            p.text(pos2(c3.right() - 14.0, y), Align2::RIGHT_CENTER, format!("{:.1}%", pr.cpu), FontId::proportional(11.5), fade(Color32::from_white_alpha(140), alpha));
+        let half = (body.width() - gap) / 2.0;
+        let lft = Rect::from_min_size(body.min, vec2(half, body.height()));
+        let rgt = Rect::from_min_max(pos2(lft.right() + gap, body.top()), body.max);
+        let cw = (half - 8.0) / 2.0;
+        let c1 = Rect::from_min_size(lft.min, vec2(cw, body.height()));
+        let col2 = Rect::from_min_max(pos2(c1.right() + 8.0, body.top()), lft.max);
+        let m1 = Rect::from_min_size(col2.min, vec2(col2.width(), (body.height() - 8.0) / 2.0));
+        let m2 = Rect::from_min_max(pos2(col2.left(), m1.bottom() + 8.0), col2.max);
+        for r in [c1, m1, m2, rgt] {
+            p.rect_filled(r, CornerRadius::same(16), fade(Color32::from_white_alpha(8), alpha));
+            p.rect_stroke(r, CornerRadius::same(16), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), alpha)), egui::StrokeKind::Inside);
         }
-        if s.top.is_empty() { p.text(c3.center(), Align2::CENTER_CENTER, "Medindo…", FontId::proportional(12.0), fade(Color32::from_white_alpha(100), alpha)); }
+        let comma = |x: String| x.replace('.', ",");
+        let level = |v: f32, hi: f32, mid: f32| if v >= hi { Color32::from_rgb(248, 113, 113) } else if v >= mid { Color32::from_rgb(251, 191, 36) } else { Color32::from_rgb(52, 211, 153) };
+        // CPU (anel de 64 px, como o SVG do Kon atual)
+        let cpu = s.cpu.round();
+        let rc = pos2(c1.center().x, c1.center().y - 8.0);
+        p.circle_stroke(rc, 26.0, Stroke::new(5.0_f32, fade(Color32::from_white_alpha(25), alpha)));
+        arc(&p, rc, 26.0, (cpu / 100.0).clamp(0.0, 1.0), Stroke::new(5.0_f32, fade(level(cpu, 90.0, 70.0), alpha)));
+        p.text(rc, Align2::CENTER_CENTER, format!("{cpu:.0}%"), bold(14.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(c1.center().x, rc.y + 44.0), Align2::CENTER_CENTER, format!("CPU · {} núcleos", s.cores), FontId::proportional(10.5), fade(Color32::from_white_alpha(115), alpha));
+        // memória e disco
+        let gbs = |b: u64| comma(format!("{:.1}", b as f64 / 1_073_741_824.0));
+        let mem_pct = (100.0 * s.mem_used as f32 / s.mem_total as f32).round();
+        let disk_pct = if s.disk_total > 0 { (100.0 * (s.disk_total - s.disk_free) as f32 / s.disk_total as f32).round() } else { 0.0 };
+        for (r, icon, title, pct, sub) in [(m1, ic::MEMORY_STICK, "Memória", mem_pct, format!("{} de {} GB", gbs(s.mem_used), gbs(s.mem_total))), (m2, ic::HARD_DRIVE, "Disco C:", disk_pct, format!("{} GB livres", gbs(s.disk_free)))] {
+            let y = r.top() + 18.0;
+            p.text(pos2(r.left() + 12.0, y), Align2::LEFT_CENTER, icon, icon_font(11.0), fade(Color32::from_white_alpha(128), alpha));
+            p.text(pos2(r.left() + 27.0, y), Align2::LEFT_CENTER, title, FontId::proportional(10.5), fade(Color32::from_white_alpha(128), alpha));
+            p.text(pos2(r.right() - 12.0, y), Align2::RIGHT_CENTER, format!("{pct:.0}%"), FontId::proportional(10.5), fade(Color32::from_white_alpha(204), alpha));
+            let t = Rect::from_min_size(pos2(r.left() + 12.0, y + 10.0), vec2(r.width() - 24.0, 4.0));
+            p.rect_filled(t, CornerRadius::same(2), fade(Color32::from_white_alpha(25), alpha));
+            p.rect_filled(Rect::from_min_size(t.min, vec2(t.width() * (pct / 100.0).clamp(0.0, 1.0), 4.0)), CornerRadius::same(2), fade(level(pct, 90.0, 75.0), alpha));
+            p.text(pos2(r.left() + 12.0, y + 26.0), Align2::LEFT_CENTER, sub, FontId::proportional(10.5), fade(Color32::from_white_alpha(102), alpha));
+        }
+        // mais pesados
+        let y0 = rgt.top() + 18.0;
+        p.text(pos2(rgt.left() + 12.0, y0), Align2::LEFT_CENTER, "MAIS PESADOS AGORA", bold(10.0), fade(Color32::from_white_alpha(102), alpha));
+        p.text(pos2(rgt.right() - 12.0, y0), Align2::RIGHT_CENTER, format!("ligado há {}h{:02}", s.uptime_s / 3600, (s.uptime_s % 3600) / 60), FontId::proportional(10.0), fade(Color32::from_white_alpha(102), alpha));
+        for (i, pr) in s.top.iter().take(4).enumerate() {
+            let y = y0 + 24.0 + i as f32 * 20.0;
+            let cx = rgt.right() - 12.0; let mx = cx - 52.0;
+            p.text(pos2(rgt.left() + 12.0, y), Align2::LEFT_CENTER, ellipsize_w(ui, &pr.name, 11.5, mx - 64.0 - rgt.left()), FontId::proportional(11.5), fade(Color32::WHITE, alpha));
+            let mem = if pr.mem_mb >= 1024 { format!("{} GB", comma(format!("{:.1}", pr.mem_mb as f64 / 1024.0))) } else { format!("{} MB", pr.mem_mb) };
+            p.text(pos2(mx, y), Align2::RIGHT_CENTER, mem, FontId::proportional(11.5), fade(Color32::from_white_alpha(128), alpha));
+            let cc = if pr.cpu >= 50.0 { Color32::from_rgb(252, 165, 165) } else if pr.cpu >= 20.0 { Color32::from_rgb(252, 211, 77) } else { Color32::from_white_alpha(204) };
+            p.text(pos2(cx, y), Align2::RIGHT_CENTER, format!("{}%", comma(format!("{:.1}", pr.cpu))), FontId::proportional(11.5), fade(cc, alpha));
+        }
+        if s.top.is_empty() { p.text(pos2(rgt.left() + 12.0, y0 + 24.0), Align2::LEFT_CENTER, "Calculando…", FontId::proportional(11.0), fade(Color32::from_white_alpha(102), alpha)); }
+        let by = rgt.bottom() - 22.0;
+        let mut job = egui::text::LayoutJob::single_section("Avisa no notch se a CPU ou a memória ficarem no limite por 30 s".into(), egui::TextFormat { font_id: FontId::proportional(10.0), color: fade(Color32::from_white_alpha(90), alpha), ..Default::default() });
+        job.wrap.max_width = rgt.width() - 80.0;
+        let g = ui.fonts_mut(|f| f.layout_job(job));
+        p.galley(pos2(rgt.left() + 12.0, by - g.size().y / 2.0), g, Color32::WHITE);
+        if toggle_c(ui, &p, pos2(rgt.right() - 32.0, by), self.settings.sys_alerts, alpha, Color32::from_rgb(16, 185, 129)).clicked() {
+            self.settings.sys_alerts = !self.settings.sys_alerts; self.settings.save();
+            self.sys_alerts.store(self.settings.sys_alerts, Ordering::Relaxed);
+        }
+    }
+
+    fn water(&self) -> u32 { if self.settings.water_day == chrono::Local::now().format("%Y-%m-%d").to_string() { self.settings.water_count } else { 0 } }
+    fn set_water(&mut self, n: u32) { self.settings.water_day = chrono::Local::now().format("%Y-%m-%d").to_string(); self.settings.water_count = n.min(8); self.settings.save(); }
+
+    fn page_water(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let p = ui.painter().clone();
+        let w = self.water();
+        let pc = p.with_clip_rect(body.expand(16.0));
+        for k in 0..16 { pc.circle_filled(pos2(body.left() + 30.0, body.top() + 30.0), 110.0 - k as f32 * 6.5, fade(Color32::from_rgba_unmultiplied(14, 165, 233, 3), alpha)); }
+        let x = body.left() + 12.0;
+        let top = body.center().y - 66.0;
+        p.text(pos2(x, top), Align2::LEFT_CENTER, "ÁGUA", bold(10.0), fade(Color32::from_rgba_unmultiplied(186, 230, 253, 178), alpha));
+        let n = w.to_string();
+        p.text(pos2(x, top + 54.0), Align2::LEFT_BOTTOM, &n, bold(44.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(x + text_w(ui, &n, 44.0) + 6.0, top + 49.0), Align2::LEFT_BOTTOM, "/ 8 copos", FontId::proportional(15.0), fade(Color32::from_white_alpha(115), alpha));
+        let ml = |v: u32| { let s = v.to_string(); if s.len() > 3 { format!("{}.{}", &s[..s.len() - 3], &s[s.len() - 3..]) } else { s } };
+        p.text(pos2(x, top + 66.0), Align2::LEFT_CENTER, format!("{} ml de 2.000 ml", ml(w * 250)), FontId::proportional(12.0), fade(Color32::from_white_alpha(115), alpha));
+        for i in 0..8u32 {
+            let r = Rect::from_min_size(pos2(x + i as f32 * 28.0, top + 74.0), vec2(22.0, 30.0)).translate(vec2(0.0, 12.0));
+            let resp = ui.interact(r, ui.id().with(("copo", i)), Sense::click());
+            let cr = CornerRadius { nw: 3, ne: 3, sw: 7, se: 7 };
+            if i < w {
+                p.rect_filled(r.expand(2.0), CornerRadius { nw: 4, ne: 4, sw: 8, se: 8 }, fade(Color32::from_rgba_unmultiplied(56, 189, 248, 40), alpha));
+                rr_mesh_cr(&p, r, |pt| fade(lerp_c(Color32::from_rgb(103, 232, 249), Color32::from_rgb(14, 165, 233), ((pt.y - r.top()) / r.height()).clamp(0.0, 1.0)), alpha));
+            }
+            p.rect_stroke(r, cr, Stroke::new(1.0_f32, fade(Color32::from_rgba_unmultiplied(125, 211, 252, 102), alpha)), egui::StrokeKind::Inside);
+            if resp.clicked() { self.set_water(if w == i + 1 { i } else { i + 1 }); }
+        }
+        let bx = body.right() - 36.0;
+        let plus = Rect::from_center_size(pos2(bx, body.center().y - 28.0), vec2(48.0, 48.0));
+        let minus = Rect::from_center_size(pos2(bx, body.center().y + 28.0), vec2(48.0, 48.0));
+        let rp = ui.interact(plus, ui.id().with("wplus"), Sense::click());
+        let rm = ui.interact(minus, ui.id().with("wminus"), Sense::click());
+        p.circle_filled(plus.center(), 30.0, fade(Color32::from_rgba_unmultiplied(56, 189, 248, 30), alpha));
+        p.circle_filled(plus.center(), if rp.is_pointer_button_down_on() { 21.0 } else { 24.0 }, fade(Color32::from_rgb(56, 189, 248), alpha));
+        p.text(plus.center(), Align2::CENTER_CENTER, ic::PLUS, icon_font(20.0), fade(Color32::BLACK, alpha));
+        p.circle_filled(minus.center(), if rm.is_pointer_button_down_on() { 21.0 } else { 24.0 }, fade(Color32::from_white_alpha(if rm.hovered() { 34 } else { 25 }), alpha));
+        p.text(minus.center(), Align2::CENTER_CENTER, ic::MINUS, icon_font(20.0), fade(Color32::WHITE, alpha));
+        if rp.clicked() { self.set_water((w + 1).min(8)); }
+        if rm.clicked() { self.set_water(w.saturating_sub(1)); }
+    }
+
+    fn page_quick(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let p = ui.painter().clone();
+        let y0 = body.top() + 9.0;
+        p.text(pos2(body.left(), y0), Align2::LEFT_CENTER, "Atalhos", bold(15.0), fade(Color32::WHITE, alpha));
+        p.text(pos2(body.left() + text_w(ui, "Atalhos", 15.0) + 8.0, y0 + 1.0), Align2::LEFT_CENTER, if self.quick.is_empty() { "seus apps, pastas, sites e comandos" } else { "um clique para abrir" }, FontId::proportional(11.0), fade(Color32::from_white_alpha(102), alpha));
+        let mut rx = body.right();
+        if self.qform.is_none() {
+            if small_pill(ui, &p, &mut rx, y0, Some(ic::PLUS), "Adicionar", false, alpha) { self.qform = Some(("app".into(), String::new(), String::new())); self.qedit = false; }
+            if !self.quick.is_empty() { let lbl = if self.qedit { "Pronto" } else { "Editar" }; if small_pill(ui, &p, &mut rx, y0, Some(ic::PENCIL), lbl, self.qedit, alpha) { self.qedit = !self.qedit; } }
+        }
+        let area = Rect::from_min_max(pos2(body.left(), body.top() + 26.0), body.max);
+        if let Some((mut kind, mut target, mut label)) = self.qform.take() {
+            // tipo
+            let kinds = [("app", "Programa"), ("folder", "Pasta"), ("site", "Site"), ("cmd", "Comando")];
+            let mut sx = area.left();
+            let seg_h = 26.0;
+            let total: f32 = kinds.iter().map(|k| text_w(ui, k.1, 11.0) + 22.0).sum::<f32>() + 6.0;
+            let sr = Rect::from_min_size(pos2(sx, area.top()), vec2(total, seg_h));
+            p.rect_filled(sr, CornerRadius::same(13), fade(Color32::from_white_alpha(15), alpha));
+            sx += 3.0;
+            for (k, l) in kinds {
+                let w = text_w(ui, l, 11.0) + 22.0;
+                let r = Rect::from_min_size(pos2(sx, area.top() + 3.0), vec2(w, seg_h - 6.0));
+                let resp = ui.interact(r, ui.id().with(("qk", k)), Sense::click());
+                if kind == k { p.rect_filled(r, CornerRadius::same(10), fade(Color32::WHITE, alpha)); }
+                p.text(r.center(), Align2::CENTER_CENTER, l, bold(11.0), fade(if kind == k { Color32::BLACK } else { Color32::from_white_alpha(178) }, alpha));
+                if resp.clicked() { kind = k.into(); }
+                sx += w;
+            }
+            let hint = match kind.as_str() { "app" => "C:\\Program Files\\…\\app.exe", "folder" => "C:\\Users\\você\\Obras", "site" => "sinapi.caixa.gov.br", _ => "code C:\\Projetos\\kon" };
+            let can_pick = kind == "app" || kind == "folder";
+            let pick_w = if can_pick && cfg!(windows) { text_w(ui, "Escolher…", 11.0) + 26.0 } else { 0.0 };
+            let r1 = Rect::from_min_size(pos2(area.left(), area.top() + 34.0), vec2(area.width() - if pick_w > 0.0 { pick_w + 6.0 } else { 0.0 }, 32.0));
+            let r2 = Rect::from_min_size(pos2(area.left(), r1.bottom() + 8.0), vec2(area.width(), 32.0));
+            let input = |ui: &mut egui::Ui, r: Rect, text: &mut String, hint: &str, focus: bool| -> egui::Response {
+                p.rect_filled(r, CornerRadius::same(8), fade(Color32::from_white_alpha(15), alpha));
+                let te = egui::TextEdit::singleline(text).hint_text(hint).frame(false).font(FontId::proportional(12.0)).desired_width(r.width() - 20.0);
+                let resp = ui.put(r.shrink2(vec2(10.0, 7.0)), te);
+                let bc = if resp.has_focus() { Color32::from_rgba_unmultiplied(129, 140, 248, 153) } else { Color32::from_white_alpha(20) };
+                p.rect_stroke(r, CornerRadius::same(8), Stroke::new(1.0_f32, fade(bc, alpha)), egui::StrokeKind::Inside);
+                if focus { resp.request_focus(); }
+                resp
+            };
+            let first = ui.memory(|m| m.focused().is_none());
+            let _t = input(ui, r1, &mut target, hint, first);
+            let _l = input(ui, r2, &mut label, "Nome (opcional)", false);
+            if pick_w > 0.0 {
+                let pr = Rect::from_min_size(pos2(r1.right() + 6.0, r1.top() + 3.0), vec2(pick_w, 26.0));
+                if pill(ui, &p, pr, "Escolher…", false, alpha).clicked() { if let Some(x) = quick::pick(kind == "folder") { target = x; } }
+            }
+            let by = area.bottom() - 14.0;
+            p.text(pos2(area.left(), by), Align2::LEFT_CENTER, if kind == "cmd" { "O comando abre numa janela do Prompt para você ver a saída." } else { "Enter para salvar · Esc cancela" }, FontId::proportional(10.5), fade(Color32::from_white_alpha(90), alpha));
+            let mut bx = area.right();
+            let save = small_pill(ui, &p, &mut bx, by, None, "Salvar", true, alpha) || ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let cancel = small_pill(ui, &p, &mut bx, by, None, "Cancelar", false, alpha) || ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if save && !target.trim().is_empty() {
+                let lb = if label.trim().is_empty() { quick::auto_label(&kind, &target) } else { label.trim().to_string() };
+                self.quick.push(Quick { id: chrono::Utc::now().timestamp_millis() as u64, kind, label: lb, target: target.trim().to_string() });
+                quick::save(&self.quick);
+            } else if !cancel { self.qform = Some((kind, target, label)); }
+            return;
+        }
+        if self.quick.is_empty() {
+            dashed_rr(&p, area, 16.0, fade(Color32::from_white_alpha(38), alpha));
+            let c = area.center();
+            p.text(pos2(c.x, c.y - 20.0), Align2::CENTER_CENTER, ic::ZAP, icon_font(20.0), fade(Color32::from_white_alpha(90), alpha));
+            p.text(pos2(c.x, c.y + 2.0), Align2::CENTER_CENTER, "Adicione o que você abre todo dia", FontId::proportional(13.0), fade(Color32::from_white_alpha(178), alpha));
+            p.text(pos2(c.x, c.y + 20.0), Align2::CENTER_CENTER, "Programas, pastas de obra, sites e até comandos", FontId::proportional(11.0), fade(Color32::from_white_alpha(90), alpha));
+            return;
+        }
+        let gap = 6.0; let cw = (area.width() - 4.0 * gap) / 5.0; let ch = 72.0;
+        let mut run = None; let mut del = None;
+        for (i, q) in self.quick.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(area.left() + (i % 5) as f32 * (cw + gap), area.top() + (i / 5) as f32 * (ch + gap)), vec2(cw, ch));
+            if r.bottom() > area.bottom() + 1.0 { break; }
+            let resp = ui.interact(r, ui.id().with(("q", q.id)), Sense::click()).on_hover_text(&q.target);
+            let pulse = if self.qedit { 0.75 + 0.25 * (ui.input(|i| i.time) as f32 * 3.0).sin() } else { 1.0 };
+            let a = alpha * pulse;
+            p.rect_filled(r, CornerRadius::same(12), fade(Color32::from_white_alpha(if resp.hovered() { 25 } else { 13 }), a));
+            p.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(15), a)), egui::StrokeKind::Inside);
+            let ib = Rect::from_center_size(pos2(r.center().x, r.top() + 26.0), vec2(32.0, 32.0));
+            p.rect_filled(ib, CornerRadius::same(8), fade(Color32::from_white_alpha(15), a));
+            let icon = match q.kind.as_str() { "folder" => ic::FOLDER_OPEN, "site" => ic::LINK_2, "cmd" => ic::TERMINAL, _ => ic::APP_WINDOW };
+            p.text(ib.center(), Align2::CENTER_CENTER, icon, icon_font(16.0), fade(Color32::from_white_alpha(190), a));
+            p.text(pos2(r.center().x, r.bottom() - 15.0), Align2::CENTER_CENTER, ellipsize_w(ui, &q.label, 11.0, cw - 12.0), FontId::proportional(11.0), fade(Color32::WHITE, a));
+            if self.qedit {
+                let x = pos2(r.right() - 2.0, r.top() + 2.0);
+                let xr = Rect::from_center_size(x, vec2(20.0, 20.0));
+                let xresp = ui.interact(xr, ui.id().with(("qx", q.id)), Sense::click());
+                p.circle_filled(x, 10.0, fade(Color32::from_rgb(239, 68, 68), alpha));
+                p.text(x, Align2::CENTER_CENTER, ic::X, icon_font(11.0), fade(Color32::WHITE, alpha));
+                if xresp.clicked() { del = Some(i); }
+                ui.ctx().request_repaint_after(Duration::from_millis(60));
+            } else if resp.clicked() { run = Some(i); }
+        }
+        if let Some(i) = del { self.quick.remove(i); quick::save(&self.quick); if self.quick.is_empty() { self.qedit = false; } }
+        if let Some(i) = run {
+            match quick::run(&self.quick[i]) { Ok(()) => self.view = View::Compact, Err(e) => { self.ctoast = Some((e, Instant::now(), true)); self.view = View::Compact; } }
+        }
     }
 
     fn page_weather(&mut self, ui: &mut egui::Ui, body: Rect, w: Option<&Weather>, alpha: f32) {
@@ -1061,6 +1245,41 @@ fn ellipsize_chars(s: &str, n: usize) -> String {
 }
 fn claude_elapsed(l: &claude::Live) -> f32 {
     match (l.started, l.done_at) { (Some(s), Some(d)) => (d - s).as_secs_f32(), (Some(s), None) => s.elapsed().as_secs_f32(), _ => 0.0 }
+}
+/// Botãozinho em pílula do cabeçalho (PillBtn do Kon atual), alinhado à direita a partir de `rx`.
+fn small_pill(ui: &mut egui::Ui, p: &egui::Painter, rx: &mut f32, cy: f32, icon: Option<char>, label: &str, primary: bool, a: f32) -> bool {
+    let w = text_w(ui, label, 11.0) + if icon.is_some() { 34.0 } else { 24.0 };
+    let r = Rect::from_min_size(pos2(*rx - w, cy - 12.0), vec2(w, 24.0));
+    let resp = ui.interact(r, ui.id().with(("sp", label)), Sense::click());
+    let bg = if primary { Color32::WHITE } else { Color32::from_white_alpha(if resp.hovered() { 30 } else { 18 }) };
+    let fg = if primary { Color32::BLACK } else { Color32::WHITE };
+    p.rect_filled(r, CornerRadius::same(12), fade(bg, a));
+    let mut x = r.left() + 12.0;
+    if let Some(i) = icon { p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, i, icon_font(11.0), fade(fg, a)); x += 15.0; }
+    p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, label, bold(11.0), fade(fg, a));
+    *rx = r.left() - 6.0;
+    resp.clicked()
+}
+/// Copo d'água: cantos de cima 3 px e de baixo 7 px, com degradê.
+fn rr_mesh_cr(p: &egui::Painter, r: Rect, color: impl Fn(Pos2) -> Color32) {
+    let mut pts = vec![];
+    for (cx, cy, rad, st) in [(r.right() - 7.0, r.bottom() - 7.0, 7.0f32, 0.0f32), (r.left() + 7.0, r.bottom() - 7.0, 7.0, 90.0), (r.left() + 3.0, r.top() + 3.0, 3.0, 180.0), (r.right() - 3.0, r.top() + 3.0, 3.0, 270.0)] {
+        for i in 0..=6 { let a = (st + i as f32 * 15.0).to_radians(); pts.push(pos2(cx + rad * a.cos(), cy + rad * a.sin())); }
+    }
+    let mut mesh = egui::Mesh::default();
+    let c = r.center(); mesh.colored_vertex(c, color(c));
+    for pt in &pts { mesh.colored_vertex(*pt, color(*pt)); }
+    let n = pts.len() as u32;
+    for i in 0..n { mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n); }
+    p.add(egui::Shape::mesh(mesh));
+}
+fn toggle_c(ui: &mut egui::Ui, p: &egui::Painter, c: Pos2, on: bool, a: f32, col: Color32) -> egui::Response {
+    let r = Rect::from_center_size(c, vec2(40.0, 22.0));
+    let resp = ui.interact(r, ui.id().with(("tgc", (c.x as i32, c.y as i32))), Sense::click());
+    p.rect_filled(r, CornerRadius::same(11), fade(if on { col } else { Color32::from_white_alpha(40) }, a));
+    let kx = if on { r.right() - 11.0 } else { r.left() + 11.0 };
+    p.circle_filled(pos2(kx, c.y), 8.5, fade(Color32::WHITE, a));
+    resp
 }
 fn fade(c: Color32, a: f32) -> Color32 { c.gamma_multiply(a.clamp(0.0, 1.0)) }
 fn bold(size: f32) -> FontId { FontId::new(size, FontFamily::Name("bold".into())) }

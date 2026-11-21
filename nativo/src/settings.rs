@@ -10,11 +10,14 @@ pub struct Settings {
     pub accent: [u8; 3],
     pub page: String,
     pub clipboard_on: bool,
+    pub water_day: String,
+    pub water_count: u32,
+    pub sys_alerts: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { open_on_hover: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true }
+        Settings { open_on_hover: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true, water_day: String::new(), water_count: 0, sys_alerts: true }
     }
 }
 

@@ -59,3 +59,7 @@ pub const FILE_CODE: char = '\u{e0c3}';
 pub const FOLDER: char = '\u{e0d7}';
 pub const TERMINAL: char = '\u{e181}';
 pub const SHIELD_CHECK: char = '\u{e1ff}';
+pub const MEMORY_STICK: char = '\u{e445}';
+pub const HARD_DRIVE: char = '\u{e0ed}';
+pub const APP_WINDOW: char = '\u{e426}';
+pub const LINK_2: char = '\u{e103}';
