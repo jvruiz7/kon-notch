@@ -1,0 +1,70 @@
+{
+  "versao": "1.3.9",
+  "electron": "45.3.4",
+  "windows": "10.0.26100",
+  "arquitetura": "x64",
+  "memoriaGB": 16,
+  "helper": true,
+  "telaCheia": {
+    "full": false,
+    "max": false
+  },
+  "atualizacao": {
+    "state": "idle"
+  },
+  "claudeHooks": {
+    "any": false,
+    "all": false
+  },
+  "telas": [
+    {
+      "x": 0,
+      "y": 0,
+      "w": 656,
+      "h": 492,
+      "escala": 1.25,
+      "principal": true,
+      "kon": true
+    }
+  ],
+  "janela": {
+    "x": -82,
+    "y": 0,
+    "width": 823,
+    "height": 560
+  },
+  "ajustes": {
+    "provider": "gemini",
+    "geminiModel": "gemini-flash-latest",
+    "claudeModel": "claude-haiku-5-5",
+    "webSearch": true,
+    "autoStart": false,
+    "devDock": false,
+    "openMode": "hover",
+    "notchSize": "normal",
+    "display": "primary",
+    "hideFullscreen": true,
+    "slimOverMax": true,
+    "hideInCapture": false,
+    "approvals": false,
+    "claudePlan": "auto",
+    "clipboardOn": false,
+    "autoUpdate": false,
+    "sysAlerts": true,
+    "focusDnd": true,
+    "wakeWord": false,
+    "wakeConf": 0.6,
+    "outfit": "auto",
+    "soundsOn": false,
+    "soundPack": "retro",
+    "soundVol": 0.6,
+    "accent": "aurora",
+    "glow": 1,
+    "onboarded": true,
+    "modelsV": 3,
+    "hasGeminiKey": true,
+    "hasAnthropicKey": false,
+    "secure": true
+  },
+  "nota": "sonda"
+}

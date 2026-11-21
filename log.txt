@@ -1,0 +1,46 @@
+[01:30:52.166] janela {"x":-82,"y":0,"w":822,"h":560,"dpr":1.25,"sw":656} retângulo físico: -103,0,924,700 foreground: Untitled - Notepad
+[01:30:52.346] 1) passa o mouse no notch
+[01:30:53.272] estado {"sheet":false,"panel":true,"tab":"HOME","sheetTitle":""}
+[01:30:53.333] 2) clica em cada página da barra
+[01:30:53.336] botões na barra: 17
+[01:30:54.018]   botão 0 "Quick add task" → {"sheet":false,"panel":true,"tab":"TO-DO","sheetTitle":""} em 676 ms 
+[01:30:54.336]   botão 1 "" → {"sheet":false,"panel":true,"tab":"HOME","sheetTitle":""} em 162 ms 
+[01:30:55.105]   botão 2 "" → {"sheet":false,"panel":true,"tab":"ARQUIVOS","sheetTitle":""} em 612 ms 
+[01:30:55.859]   botão 3 "" → {"sheet":false,"panel":true,"tab":"CLIPS","sheetTitle":""} em 599 ms 
+[01:30:56.592]   botão 4 "" → {"sheet":false,"panel":true,"tab":"MUSIC","sheetTitle":""} em 579 ms 
+[01:30:57.356]   botão 5 "" → {"sheet":false,"panel":true,"tab":"SOM","sheetTitle":""} em 610 ms 
+[01:30:58.261]   botão 6 "" → {"sheet":false,"panel":true,"tab":"CLIMA","sheetTitle":""} em 750 ms 
+[01:30:59.057]   botão 7 "" → {"sheet":false,"panel":true,"tab":"FOCUS","sheetTitle":""} em 628 ms 
+[01:30:59.812]   botão 8 "" → {"sheet":false,"panel":true,"tab":"TO-DO","sheetTitle":""} em 600 ms 
+[01:31:00.567]   botão 9 "" → {"sheet":false,"panel":true,"tab":"CLAUDE","sheetTitle":""} em 601 ms 
+[01:31:01.329]   botão 10 "" → {"sheet":false,"panel":true,"tab":"ATALHOS","sheetTitle":""} em 608 ms 
+[01:31:02.080]   botão 11 "" → {"sheet":false,"panel":true,"tab":"SISTEMA","sheetTitle":""} em 598 ms 
+[01:31:02.812]   botão 12 "" → {"sheet":false,"panel":true,"tab":"WATER","sheetTitle":""} em 577 ms 
+[01:31:03.562]   botão 13 "" → {"sheet":false,"panel":true,"tab":"SLEEP","sheetTitle":""} em 594 ms 
+[01:31:04.310]   botão 14 "" → {"sheet":false,"panel":true,"tab":"LOCK","sheetTitle":""} em 593 ms 
+[01:31:04.522] 3) abre Ajustes pela engrenagem
+[01:31:04.526] engrenagem {"x":632.8500366210938,"y":241,"w":28,"h":28}
+[01:31:04.842]   +150 ms {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Kon
+[01:31:05.100]   +400 ms {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Kon
+[01:31:05.859]   +900 ms {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Kon
+[01:31:07.316]   +1600 ms {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Kon
+[01:31:07.364] aba Ajustes {"x":481.4250183105469,"y":14,"w":54.85000228881836,"h":20}
+[01:31:08.109]   depois de clicar Ajustes {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Kon
+[01:31:09.035]   campo focado? INPUT valor=abc fg: Kon {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""}
+[01:31:09.082] select {"x":276.3500061035156,"y":366.75,"w":327.6499938964844,"h":28}
+[01:31:10.158]   com o select aberto {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Kon
+[01:31:10.670]   depois do ESC {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""}
+[01:31:11.225]   depois de rolar {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""}
+[01:31:11.226] 4) clique fora (no Bloco de Notas) e volta
+[01:31:12.168]    {"sheet":true,"panel":true,"tab":"LOCK","sheetTitle":""} fg: Program Manager
+[01:31:13.174]   hover de novo {"sheet":false,"panel":true,"tab":"LOCK","sheetTitle":""}
+[01:31:13.215] 5) cliques rápidos alternando páginas (40 cliques)
+[01:31:21.726]   40 cliques em 8490 ms {"sheet":false,"panel":true,"tab":"CLAUDE","sheetTitle":""}
+[01:31:22.568]   depois {"sheet":false,"panel":true,"tab":"SISTEMA","sheetTitle":""}
+[01:31:23.530]   engrenagem depois dos cliques rápidos {"sheet":true,"panel":true,"tab":"SISTEMA","sheetTitle":""}
+[01:31:23.582] 6) abre Ajustes pelo atalho do menu da bandeja não dá; testa Ctrl+Alt+Espaço (Perguntar)
+[01:31:25.153]    {"sheet":true,"panel":true,"tab":"SISTEMA","sheetTitle":""} foco: INPUT fg: Kon
+[01:31:25.200] 7) gera um relatório de problemas (deve trazer cliques.json e nenhuma chave)
+[01:31:29.255]    {"ok":true}
+[01:31:30.758]   relatório copiado kon-relatorio-2026-11-21-01-31
+[01:31:30.758] FIM
