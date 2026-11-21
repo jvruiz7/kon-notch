@@ -1,6 +1,6 @@
 [package]
 name = "kon"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 description = "Kon — o notch do Windows (versão nativa em Rust)"
 
@@ -33,3 +33,6 @@ panic = "abort"
 # só para testar a interface no Linux (o produto é para Windows)
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { version = "0.33", default-features = false, features = ["glow", "default_fonts", "x11"] }
+
+[build-dependencies]
+winresource = "0.1"

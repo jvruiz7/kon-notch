@@ -38,6 +38,7 @@ fn main() -> eframe::Result<()> {
     if std::env::args().any(|a| a == "--uninstall") { installer::uninstall(); return Ok(()); }
     if !installer::single_instance() { return Ok(()); }
     if installer::ensure_installed() { return Ok(()); }
+    installer::close_old_kon();
     let area = platform::primary_work_area();
     // posição em pixels lógicos: o eframe converte com a escala do monitor principal
     let scale = guess_scale(area.w);
@@ -45,7 +46,7 @@ fn main() -> eframe::Result<()> {
 
     let make = |renderer: eframe::Renderer| eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Kon")
+            .with_title("KonNativo")
             .with_inner_size([WIN_W, WIN_H])
             .with_position([x, area.y as f32 / scale])
             .with_decorations(false)
@@ -64,6 +65,7 @@ fn main() -> eframe::Result<()> {
         let d = platform::data_dir();
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::write(d.join("erro.log"), format!("pane: {info}\n"));
+        installer::message(&format!("O Kon encontrou um erro e precisou fechar:\n\n{info}\n\nO detalhe ficou salvo em %APPDATA%\\KonNativo\\erro.log"), false);
     }));
     let r = eframe::run_native("Kon", make(eframe::Renderer::Glow), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
     if let Err(e) = &r {
@@ -71,6 +73,7 @@ fn main() -> eframe::Result<()> {
         let d = platform::data_dir();
         let _ = std::fs::create_dir_all(&d);
         let _ = std::fs::write(d.join("erro.log"), format!("{e:?}\n"));
+        installer::message(&format!("O Kon não conseguiu abrir a janela:\n\n{e}\n\nAtualize o driver de vídeo e tente de novo. O detalhe ficou salvo em %APPDATA%\\KonNativo\\erro.log"), false);
     }
     r
 }

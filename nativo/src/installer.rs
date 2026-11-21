@@ -28,6 +28,7 @@ mod imp {
     pub fn is_installed_copy() -> bool { std::env::current_exe().map_or(false, |me| same(&me, &installed_exe())) }
 
     pub fn message(text: &str, ask: bool) -> bool {
+        if std::env::var_os("KON_CI").is_some() { return false; }
         let r = unsafe { MessageBoxW(None, &HSTRING::from(text), &HSTRING::from("Kon"), if ask { MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND } else { MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND }) };
         r == IDYES
     }
@@ -43,6 +44,8 @@ mod imp {
 
     /// Registra em "Aplicativos instalados" (Configurações do Windows), com a versão atual.
     pub fn register() {
+        // instalado pelo KonSetup.exe: o instalador cuida do registro e da desinstalação
+        if dir().join("Desinstalar.exe").exists() { return; }
         let exe = installed_exe();
         unsafe {
             let mut k = HKEY::default();
@@ -109,6 +112,56 @@ mod imp {
         message("O Kon foi desinstalado.", false);
     }
 
+    /// O Kon antigo (Electron) aberto ao mesmo tempo disputa os atalhos e o topo da tela: oferece fechar
+    /// e tirar ele do início do Windows.
+    pub fn close_old_kon() {
+        use windows::core::{w, PWSTR};
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, TerminateProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE};
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowThreadProcessId};
+        if std::env::var_os("KON_PORTABLE").is_some() || std::env::var_os("KON_CI").is_some() { return; }
+        unsafe {
+            let Ok(h) = FindWindowW(w!("Chrome_WidgetWin_1"), w!("Kon")) else { return };
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(h, Some(&mut pid));
+            if pid == 0 || pid == std::process::id() { return; }
+            let Ok(ph) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, false, pid) else { return };
+            let mut buf = [0u16; 1024]; let mut len = buf.len() as u32;
+            let path = if QueryFullProcessImageNameW(ph, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok() { String::from_utf16_lossy(&buf[..len as usize]) } else { String::new() };
+            if message("O Kon antigo está aberto e usa os mesmos atalhos e o mesmo lugar no topo da tela.\n\nFechar o Kon antigo e não abrir mais ele com o Windows?", true) {
+                let _ = TerminateProcess(ph, 0);
+                // fecha também os outros processos do Electron dele
+                if !path.is_empty() {
+                    let p = path.replace('\'', "''");
+                    let ps = format!("Get-Process | Where-Object {{ $_.Path -eq '{p}' }} | Stop-Process -Force -ErrorAction SilentlyContinue");
+                    let _ = std::process::Command::new("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &ps]).creation_flags(NO_WINDOW).status();
+                    remove_run_entries_for(&path);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            let _ = CloseHandle(ph);
+        }
+    }
+    fn remove_run_entries_for(exe: &str) {
+        let key = HSTRING::from("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+        unsafe {
+            let mut k = HKEY::default();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, &key, None, KEY_READ | KEY_SET_VALUE, &mut k).is_err() { return; }
+            let mut del = vec![];
+            for i in 0..256u32 {
+                let mut name = [0u16; 512]; let mut nl = name.len() as u32;
+                let mut data = [0u8; 4096]; let mut dl = data.len() as u32;
+                if RegEnumValueW(k, i, Some(windows::core::PWSTR(name.as_mut_ptr())), &mut nl, None, None, Some(data.as_mut_ptr()), Some(&mut dl)).is_err() { break; }
+                let n = String::from_utf16_lossy(&name[..nl as usize]);
+                let wide: Vec<u16> = data[..dl as usize].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                let v = String::from_utf16_lossy(&wide).to_lowercase();
+                if n != "KonNativo" && v.contains(&exe.to_lowercase()) { del.push(n); }
+            }
+            for n in del { let _ = RegDeleteValueW(k, &HSTRING::from(n)); }
+            let _ = RegCloseKey(k);
+        }
+    }
+
     /// Uma cópia por vez. Ao reabrir depois de atualizar/instalar, espera a anterior fechar.
     pub fn single_instance() -> bool {
         use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
@@ -134,6 +187,8 @@ mod imp {
     pub fn uninstall() {}
     pub fn single_instance() -> bool { true }
     pub fn is_installed_copy() -> bool { false }
+    pub fn close_old_kon() {}
+    pub fn message(_t: &str, _ask: bool) -> bool { false }
 }
 
 pub use imp::*;

@@ -13,8 +13,8 @@ mod imp {
     use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
 
     fn hwnd() -> Option<HWND> {
-        // a janela do Kon tem o título "Kon" e é da nossa classe (winit)
-        unsafe { FindWindowW(None, w!("Kon")).ok() }
+        // a janela do Kon nativo tem o título "KonNativo" (o Kon antigo, em Electron, usa "Kon") e é da nossa classe (winit)
+        unsafe { FindWindowW(None, w!("KonNativo")).ok() }
     }
 
     /// Cursor e janela, os dois em pixels físicos (o processo é "per-monitor DPI aware", então não há mistura de escalas).

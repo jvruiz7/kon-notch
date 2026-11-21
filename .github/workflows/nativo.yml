@@ -35,7 +35,7 @@ jobs:
       - name: Abre o Kon nativo por 15 s (não pode fechar sozinho)
         shell: pwsh
         run: |
-          $env:KON_PORTABLE = '1'
+          $env:KON_PORTABLE = '1'; $env:KON_CI = '1'
           $p = Start-Process target\release\kon.exe -PassThru
           Start-Sleep 15
           if ($p.HasExited) {
@@ -50,6 +50,16 @@ jobs:
           Write-Host "Memória: $mb MB · tamanho do exe: $kb KB"
           "MEM=$mb" >> $env:GITHUB_ENV; "SIZE=$kb" >> $env:GITHUB_ENV
           Stop-Process -Id $p.Id -Force
+      - name: Monta o instalador (KonSetup.exe)
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $mk = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path $mk)) { choco install nsis -y --no-progress | Out-Null }
+          if (-not (Test-Path $mk)) { $mk = (Get-Command makensis -ErrorAction Stop).Source }
+          & $mk "-DVERSION=$v" installer\kon.nsi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Write-Host "Instalador: $([math]::Round((Get-Item installer\KonSetup.exe).Length / 1KB)) KB"
       - name: Publica a versão (o Kon instalado se atualiza sozinho)
         if: contains(github.event.head_commit.message, '[publicar]')
         shell: pwsh
@@ -58,5 +68,6 @@ jobs:
           $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           $tag = "nativo-v$v"
           Copy-Item target\release\kon.exe "Kon.exe"
+          Copy-Item installer\KonSetup.exe "KonSetup.exe"
           gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) { gh release upload $tag "Kon.exe" --clobber } else { gh release create $tag "Kon.exe" --title "Kon $v" --notes "Kon $v (Rust nativo). Baixe o Kon.exe e abra: ele se instala sozinho e se atualiza pelas próximas versões. Memória: $env:MEM MB · exe: $env:SIZE KB." }
+          if ($LASTEXITCODE -eq 0) { gh release upload $tag "Kon.exe" "KonSetup.exe" --clobber } else { gh release create $tag "KonSetup.exe" "Kon.exe" --title "Kon $v" --notes "Kon $v (Rust nativo). Baixe o KonSetup.exe e instale. O Kon.exe é usado pelas atualizações automáticas." }
