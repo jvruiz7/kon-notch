@@ -31,7 +31,14 @@ fn main() -> eframe::Result<()> {
         vsync: true,
         ..Default::default()
     };
-    eframe::run_native("Kon", opts, Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))))
+    let r = eframe::run_native("Kon", opts, Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
+    if let Err(e) = &r {
+        // sem console no Windows: o erro vai para %APPDATA%\KonNativo\erro.log
+        let d = platform::data_dir();
+        let _ = std::fs::create_dir_all(&d);
+        let _ = std::fs::write(d.join("erro.log"), format!("{e:?}\n"));
+    }
+    r
 }
 
 /// Estimativa inicial da escala (a real chega no primeiro quadro e a janela é recentralizada).
