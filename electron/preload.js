@@ -7,10 +7,14 @@ const CHANNELS = [
   "clip:changed", "update:ready", "update:status", "reminder:due", "reminders:changed", "textact:open", "wake:state", "settings:changed", "key:detected",
 ];
 
+window.addEventListener("resize", () => ipcRenderer.send("hit:viewport", { vw: window.innerWidth, vh: window.innerHeight, dpr: window.devicePixelRatio }));
+
 contextBridge.exposeInMainWorld("kon", {
   desktop: true,
   // janela
-  setHitRects: (rects) => ipcRenderer.send("hit:rects", rects),
+  // regiões clicáveis + tamanho real da página: o main converte coordenadas da janela para CSS px
+  // (corrige escala dupla em monitores com DPI diferentes e qualquer zoom)
+  setHitRects: (rects) => ipcRenderer.send("hit:rects", { rects, vw: window.innerWidth, vh: window.innerHeight, dpr: window.devicePixelRatio }),
   pin: (on) => ipcRenderer.send("win:pin", !!on),
   focus: () => ipcRenderer.send("win:focus"),
   blur: () => ipcRenderer.send("win:blur"),
