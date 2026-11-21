@@ -108,23 +108,37 @@ mod imp {
 
     /// O que está na frente: (tela cheia — jogo, vídeo, apresentação; janela maximizada no monitor do Kon).
     pub fn foreground_state() -> (bool, bool) {
-        use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE};
-        let full = unsafe { SHQueryUserNotificationState() }.map(|s| s == QUNS_BUSY || s == QUNS_RUNNING_D3D_FULL_SCREEN || s == QUNS_PRESENTATION_MODE).unwrap_or(false);
-        let max = unsafe {
+        // igual ao Kon atual: olha a janela em primeiro plano. Tela cheia = ela cobre o monitor inteiro
+        // (sem estar maximizada) ou o Windows diz que há jogo D3D/apresentação. "Ocupado" (QUNS_BUSY) não conta:
+        // sobreposições transparentes (NVIDIA, Game Bar) deixam o Windows nesse estado o tempo todo.
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        use windows::Win32::UI::Shell::{SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN};
+        unsafe {
             let fg = GetForegroundWindow();
-            if fg.0.is_null() || Some(fg) == hwnd() { false } else {
-                let mut cls = [0u16; 64];
-                let n = GetClassNameW(fg, &mut cls);
-                let c = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
-                // a área de trabalho e a barra de tarefas não contam
-                if c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" { false }
-                else if IsZoomed(fg).as_bool() {
-                    // só se a janela maximizada estiver no mesmo monitor do Kon
-                    match hwnd() { Some(k) => { use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST}; MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) == MonitorFromWindow(k, MONITOR_DEFAULTTONEAREST) } None => true }
-                } else { false }
-            }
-        };
-        (full, max)
+            if fg.0.is_null() || !IsWindowVisible(fg).as_bool() { return (false, false); }
+            let Some(k) = hwnd() else { return (false, false) };
+            if fg == k { return (false, false); }
+            let mut fpid = 0u32; GetWindowThreadProcessId(fg, Some(&mut fpid));
+            if fpid == std::process::id() { return (false, false); }
+            let mut cls = [0u16; 64];
+            let n = GetClassNameW(fg, &mut cls);
+            let c = String::from_utf16_lossy(&cls[..n.max(0) as usize]);
+            if c == "Progman" || c == "WorkerW" || c == "Shell_TrayWnd" || c == "Shell_SecondaryTrayWnd" { return (false, false); }
+            let mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+            // só importa o que está no monitor do Kon
+            if mon != MonitorFromWindow(k, MONITOR_DEFAULTTONEAREST) { return (false, false); }
+            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            let _ = GetMonitorInfoW(mon, &mut mi);
+            let mut r = RECT::default();
+            let _ = GetWindowRect(fg, &mut r);
+            let m = mi.rcMonitor;
+            let covers = r.left <= m.left && r.top <= m.top && r.right >= m.right && r.bottom >= m.bottom;
+            let zoomed = IsZoomed(fg).as_bool();
+            let q = SHQueryUserNotificationState().ok();
+            let full = (covers && !zoomed) || q == Some(QUNS_RUNNING_D3D_FULL_SCREEN) || q == Some(QUNS_PRESENTATION_MODE);
+            (full, !full && zoomed)
+        }
     }
 
     /// Esconde/mostra a janela do Kon (tela cheia).

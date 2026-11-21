@@ -1,6 +1,6 @@
 [package]
 name = "kon"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2021"
 description = "Kon — o notch do Windows (versão nativa em Rust)"
 
