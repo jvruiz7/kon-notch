@@ -126,8 +126,45 @@ jobs:
           if (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\app.kon.desktop' -ErrorAction SilentlyContinue) { Fail 'entrada de desinstalação ficou no registro' }
           Write-Host 'Tudo certo no Windows.'
 
+  ui-windows:
+    # cliques REAIS do sistema na interface instalada, a 100% e a 125%; a versão só sai se todos responderem
+    needs: build
+    if: needs.build.outputs.skip != '1'
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scale: ["1", "1.25"]
+    steps:
+      - uses: actions/checkout@v4
+        with: { sparse-checkout: .github/probe }
+      - uses: actions/download-artifact@v4
+        with:
+          name: kon-release
+          path: release
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Instalar e dirigir a interface
+        shell: pwsh
+        run: |
+          $v = '${{ needs.build.outputs.version }}'
+          Start-Process (Resolve-Path "release/Kon-Setup-$v.exe") -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Kon\Kon.exe'
+          Get-Process -Name Kon -ErrorAction SilentlyContinue | Stop-Process -Force
+          $d = Join-Path $env:APPDATA 'Kon'; New-Item -ItemType Directory -Force $d | Out-Null
+          '{"onboarded":true,"hideInCapture":false,"autoUpdate":false,"devDock":false,"soundsOn":false,"approvals":false,"clipboardOn":false}' | Set-Content (Join-Path $d 'settings.json')
+          $tools = Join-Path $env:RUNNER_TEMP 'probe-tools'; New-Item -ItemType Directory -Force $tools | Out-Null
+          Push-Location $tools; npm init -y | Out-Null; npm i playwright-core@1 | Out-Null; Pop-Location
+          Copy-Item .github/probe/drive.js $tools
+          Start-Process $exe -ArgumentList '--remote-debugging-port=9222',"--force-device-scale-factor=${{ matrix.scale }}"
+          Start-Sleep 20
+          node (Join-Path $tools 'drive.js') "$env:RUNNER_TEMP\probe"
+          $code = $LASTEXITCODE
+          foreach ($f in 'kon-error.log') { $x = Join-Path $d $f; if (Test-Path $x) { Write-Host "--- $f"; Get-Content $x -Tail 40 } }
+          if ($code -ne 0) { Write-Host "::error::cliques na interface falharam (escala ${{ matrix.scale }})"; exit 1 }
+
   publish:
-    needs: [build, test-windows]
+    needs: [build, test-windows, ui-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

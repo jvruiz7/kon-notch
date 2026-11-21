@@ -4,6 +4,8 @@ const { execFileSync, spawn } = require("child_process");
 const fs = require("fs"), path = require("path");
 const OUT = process.argv[2];
 fs.mkdirSync(OUT, { recursive: true });
+let failures = 0;
+const fail = (m) => { failures++; log("FALHA", m); };
 const log = (...a) => { const l = `[${new Date().toISOString().slice(11, 23)}] ${a.join(" ")}`; console.log(l); fs.appendFileSync(path.join(OUT, "log.txt"), l + "\n"); };
 // PowerShell persistente com user32 carregado
 const ps = spawn("powershell.exe", ["-NoProfile", "-Command", "-"], { stdio: ["pipe", "pipe", "inherit"] });
@@ -26,7 +28,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   for (let i = 0; i < 40 && !browser; i++) { try { browser = await chromium.connectOverCDP("http://127.0.0.1:9222"); } catch { await sleep(1000); } }
   if (!browser) { log("SEM CDP"); process.exit(1); }
   const page = browser.contexts()[0].pages().find((p) => !p.url().includes("#ocr")) || browser.contexts()[0].pages()[0];
-  page.on("pageerror", (e) => log("PAGEERROR", e.message));
+  page.on("pageerror", (e) => fail("erro na página: " + e.message));
   page.on("console", (m) => { if (["error", "warning"].includes(m.type())) log("CONSOLE", m.type(), m.text().slice(0, 300)); });
   await sleep(1500);
   await run(`[void][M]::SetProcessDPIAware()`);
@@ -63,6 +65,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await click(p.x, p.y);
     let after = before; while (Date.now() - t0 < 1500) { after = JSON.stringify(await state()); if (after !== before) break; await sleep(30); }
     log(`  botão ${i} "${r.t}" → ${after} em ${Date.now() - t0} ms ${after === before ? "(SEM MUDANÇA)" : ""}`);
+    if (after === before && i > 0) fail(`botão ${i} da barra não respondeu`);
     await sleep(150);
   }
   await shot("paginas");
@@ -73,6 +76,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   log("engrenagem", JSON.stringify(r));
   if (r) { const p = S(r); await click(p.x, p.y); }
   for (const ms of [150, 400, 900, 1600]) { await sleep(ms === 150 ? 150 : ms - 150); log(`  +${ms} ms`, JSON.stringify(await state()), "fg:", await fg()); }
+  if (!(await state()).sheet) fail("a engrenagem não abriu os Ajustes");
   await shot("ajustes-aberto");
   r = await rectOf({ text: "Ajustes" }); log("aba Ajustes", JSON.stringify(r));
   if (r) { const p = S(r); await click(p.x, p.y); await sleep(600); log("  depois de clicar Ajustes", JSON.stringify(await state()), "fg:", await fg()); }
@@ -101,7 +105,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await sleep(800); await shot("rapidos"); log("  depois", JSON.stringify(await state()));
   // ainda responde?
   r = await rectOf({ title: "Ajustes e Pages" });
-  if (r) { const p = S(r); await click(p.x, p.y); await sleep(800); log("  engrenagem depois dos cliques rápidos", JSON.stringify(await state())); await shot("ajustes-depois"); }
+  if (r) { const p = S(r); await click(p.x, p.y); await sleep(800); const st = await state(); log("  engrenagem depois dos cliques rápidos", JSON.stringify(st)); await shot("ajustes-depois"); if (!st.sheet) fail("depois dos cliques rápidos a engrenagem não respondeu"); }
+  else fail("depois dos cliques rápidos o painel não estava aberto");
 
   log("6) abre Ajustes pelo atalho do menu da bandeja não dá; testa Ctrl+Alt+Espaço (Perguntar)");
   await click(cx + 500, 700); await sleep(500);
@@ -110,7 +115,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   log("  ", JSON.stringify(await page.evaluate(() => window.kon.report({ note: "sonda", withShot: false }).then((r) => ({ ok: r?.ok, err: r?.error })))));
   await sleep(1500);
   try { const os = require("os"); const d = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith("kon-relatorio-")).sort().pop(); for (const f of fs.readdirSync(path.join(os.tmpdir(), d))) fs.copyFileSync(path.join(os.tmpdir(), d, f), path.join(OUT, "rel-" + f)); log("  relatório copiado", d); } catch (e) { log("  sem relatório", e.message); }
-  log("FIM");
+  log(failures ? `FIM com ${failures} falha(s)` : "FIM sem falhas");
   await browser.close().catch(() => {});
-  ps.stdin.end(); process.exit(0);
+  ps.stdin.end(); process.exit(failures ? 1 : 0);
 })().catch((e) => { log("ERRO", e.stack); process.exit(1); });

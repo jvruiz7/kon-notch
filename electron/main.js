@@ -263,7 +263,8 @@ let lastMismatchLog = 0;
 const insideRects = (x, y) => hitRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
 // cursor do sistema → coordenadas da página (CSS px). Se a página não tiver o mesmo tamanho da janela
 // (escala dupla do Windows com monitores de DPI diferentes, zoom), converte pela proporção real.
-function systemRel() {
+let viewport = null; // { vw, vh, dpr } da página (vem com as regiões clicáveis)
+function systemRelRaw() {
   const b = win.getBounds();
   let p = screen.getCursorScreenPoint(), r = b;
   // Windows com monitores de escalas diferentes: os "DIPs" do cursor e da janela podem vir de escalas diferentes
@@ -273,6 +274,35 @@ function systemRel() {
   }
   const kx = viewport?.vw && r.width ? viewport.vw / r.width : 1, ky = viewport?.vh && r.height ? viewport.vh / r.height : 1;
   return { x: (p.x - r.x) * kx, y: (p.y - r.y) * ky };
+}
+// Autocorreção: a página diz onde o mouse está de verdade (coordenadas da própria janela). Guardamos pares
+// (cálculo do sistema → posição da página) e, se divergirem, ajustamos uma reta por eixo. Assim, mesmo num
+// arranjo de monitores que não previmos, a reserva (cursor do sistema) passa a acertar.
+let calib = null, calibSamples = [];
+function resetCalib(reason) { if (calib || calibSamples.length) diag("calibracao:zerada", { motivo: reason }); calib = null; calibSamples = []; }
+function fitAxis(xs, ys) {
+  const n = xs.length, mx = xs.reduce((a, b) => a + b, 0) / n, my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxx = 0, sxy = 0; for (let i = 0; i < n; i++) { sxx += (xs[i] - mx) ** 2; sxy += (xs[i] - mx) * (ys[i] - my); }
+  const spread = Math.max(...xs) - Math.min(...xs);
+  if (spread < 120 || sxx === 0) return { a: 1, b: my - mx };          // pouca variação: só deslocamento
+  const a = sxy / sxx; if (a < 0.5 || a > 2) return { a: 1, b: my - mx }; // escala absurda: ignora
+  return { a, b: my - a * mx };
+}
+function learnCalib(sys, page) {
+  calibSamples.push({ sx: sys.x, sy: sys.y, px: page.x, py: page.y });
+  if (calibSamples.length > 60) calibSamples.shift();
+  if (calibSamples.length < 6) return;
+  const err = calibSamples.map((c) => Math.hypot(c.px - c.sx, c.py - c.sy)).sort((a, b) => a - b);
+  const med = err[Math.floor(err.length / 2)];
+  if (med <= 3) { if (calib) { calib = null; diag("calibracao:desligada"); } return; }
+  const fx = fitAxis(calibSamples.map((c) => c.sx), calibSamples.map((c) => c.px));
+  const fy = fitAxis(calibSamples.map((c) => c.sy), calibSamples.map((c) => c.py));
+  const was = !!calib; calib = { ax: fx.a, bx: fx.b, ay: fy.a, by: fy.b };
+  if (!was) diag("calibracao:ligada", { erroMediano: Math.round(med), ...Object.fromEntries(Object.entries(calib).map(([k, v]) => [k, +v.toFixed(3)])) });
+}
+function systemRel() {
+  const r = systemRelRaw();
+  return calib ? { x: calib.ax * r.x + calib.bx, y: calib.ay * r.y + calib.by } : r;
 }
 function hitTick() {
   if (!win || win.isDestroyed() || !win.isVisible()) return;
@@ -303,19 +333,22 @@ ipcMain.on("hit:cursor", (_e, pt) => {
   if (!Array.isArray(pt)) { pageCursor = null; return; }
   pageCursor = { x: +pt[0], y: +pt[1], at: now, sys: screen.getCursorScreenPoint() };
   // registra quando o cálculo pelo cursor do sistema discorda da página (indica problema de escala/monitor)
-  if (now - lastMismatchLog > 5000 && win && !win.isDestroyed()) {
-    try { const s = systemRel(); if (Math.abs(s.x - pageCursor.x) > 6 || Math.abs(s.y - pageCursor.y) > 6) { lastMismatchLog = now; diag("desalinho", { pagina: [Math.round(pageCursor.x), Math.round(pageCursor.y)], sistema: [Math.round(s.x), Math.round(s.y)] }); } } catch {}
+  if (win && !win.isDestroyed()) {
+    try {
+      const raw = systemRelRaw();
+      learnCalib(raw, pageCursor);
+      if (now - lastMismatchLog > 5000 && (Math.abs(raw.x - pageCursor.x) > 6 || Math.abs(raw.y - pageCursor.y) > 6)) { lastMismatchLog = now; diag("desalinho", { pagina: [Math.round(pageCursor.x), Math.round(pageCursor.y)], sistema: [Math.round(raw.x), Math.round(raw.y)], corrigido: !!calib }); }
+    } catch {}
   }
   hitTick(); // responde na hora, sem esperar o próximo ciclo de 40 ms
 });
-let viewport = null; // { vw, vh, dpr } da página
 ipcMain.on("hit:rects", (_e, msg) => {
   const rects = Array.isArray(msg) ? msg : msg?.rects;
   hitRects = Array.isArray(rects) ? rects : [];
   if (msg && !Array.isArray(msg) && msg.vw) viewport = { vw: +msg.vw, vh: +msg.vh, dpr: +msg.dpr || 1 };
   diag("regioes", { r: hitRects.map((r) => [Math.round(r.x), Math.round(r.y), Math.round(r.w), Math.round(r.h)]), viewport });
 });
-ipcMain.on("hit:viewport", (_e, v) => { if (v?.vw) { viewport = { vw: +v.vw, vh: +v.vh, dpr: +v.dpr || 1 }; diag("viewport", viewport); } });
+ipcMain.on("hit:viewport", (_e, v) => { if (v?.vw) { viewport = { vw: +v.vw, vh: +v.vh, dpr: +v.dpr || 1 }; resetCalib("tamanho da página mudou"); diag("viewport", viewport); } });
 ipcMain.on("diag", (_e, ev) => { if (ev && typeof ev === "object") { const { e, ...rest } = ev; diag("ui:" + String(e || "?").slice(0, 30), rest); } });
 // O Kon só pega o foco do teclado quando você vai digitar (Perguntar, Ajustes, OCR, nova tarefa).
 // Clicar nos botões do notch não rouba o foco da janela em que você estava trabalhando.
@@ -1140,7 +1173,7 @@ function startUpdater() {
     lastPct = pct;
     setUpdStatus({ state: "downloading", version: updateStatus.version, percent: pct });
   });
-  autoUpdater.on("update-downloaded", (info) => { updateInfo = { version: info.version }; setUpdStatus({ state: "ready", version: info.version }); send("update:ready", updateInfo); });
+  autoUpdater.on("update-downloaded", (info) => { updateInfo = { version: info.version }; setUpdStatus({ state: "ready", version: info.version }); send("update:ready", updateInfo); buildTrayMenu(); });
   autoUpdater.on("error", (e) => { const message = String(e?.message || e).split("\n")[0]; updLog("error", message); setUpdStatus({ state: "error", message }); });
   const check = () => { if (readSettings().autoUpdate !== false) checkAll().catch((e) => updLog("error", e.message)); };
   setTimeout(check, 20e3);
@@ -1180,6 +1213,7 @@ async function downloadPatch(j) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "app.asar"), asar);
   updateInfo = { version: j.version, patch: true };
+  buildTrayMenu();
   updLog("info", `patch ${j.version} pronto (${(got / 1e6).toFixed(1)} MB)`);
   setUpdStatus({ state: "ready", version: j.version, small: true });
   send("update:ready", updateInfo);
@@ -1229,14 +1263,15 @@ function installPatch(relaunch = true) {
 }
 
 ipcMain.handle("update:get", () => ({ version: app.getVersion(), ready: updateInfo, status: updateStatus, portable: !!process.env.PORTABLE_EXECUTABLE_FILE }));
-ipcMain.on("update:install", () => {
+ipcMain.on("update:install", () => installUpdate());
+function installUpdate() {
   if (!updateInfo || !autoUpdater) return;
   updLog("info", `instalando ${updateInfo.version}${updateInfo.patch ? " (pequena)" : ""}`);
   app.isQuitting = true;
   try { helper?.stdin.end(); helper?.kill(); } catch {}
   if (updateInfo.patch) return installPatch();
   setImmediate(() => autoUpdater.quitAndInstall(true, true));
-});
+}
 ipcMain.handle("update:check", async () => {
   if (!autoUpdater || !app.isPackaged) return { ok: false, error: "Só no app instalado" };
   if (process.env.PORTABLE_EXECUTABLE_FILE) return { ok: false, error: "A versão portátil não se atualiza sozinha — use o instalador" };
@@ -1285,12 +1320,14 @@ function buildTrayMenu() {
   if (!tray) return;
   const s = readSettings();
   tray.setContextMenu(Menu.buildFromTemplate([
+    ...(updateInfo ? [{ label: `Reiniciar e atualizar para ${updateInfo.version}`, click: () => installUpdate() }, { type: "separator" }] : []),
     { label: "Perguntar ao Kon      Ctrl+Alt+Space", click: () => { focusKon(); send("shortcut", "ask"); } },
     { label: "Smart OCR             Ctrl+Alt+T", click: () => startOcr() },
     { label: "Abrir painel          Ctrl+Alt+E", click: () => send("shortcut", "panel") },
     { label: "Área de transferência  Ctrl+Alt+V", click: () => send("shortcut", "clip") },
     { label: "Ações no texto selecionado  Ctrl+Alt+R", click: () => grabSelection().catch(() => {}) },
-    { label: "Configurações", click: () => { focusKon(); send("shortcut", "settings"); } },
+    { label: "Ajustes", click: () => { focusKon(); send("shortcut", "settings"); } },
+    { label: "Procurar atualização", click: () => { checkAll().catch(() => {}); } },
     { label: "Relatar problema", click: () => { focusKon(); send("shortcut", "report"); } },
     { type: "separator" },
     { label: "Iniciar com o Windows", type: "checkbox", checked: !!s.autoStart, click: (i) => { writeSettings({ autoStart: i.checked }); send("settings:changed", publicSettings()); } },
@@ -1328,7 +1365,7 @@ if (process.argv.includes("--remove-hooks")) {
     setInterval(() => { heavyCheck().catch(() => {}); }, 5000);
     // mantém a opção "Iniciar com o Windows" em sincronia com o que o instalador marcou
     try { const on = app.getLoginItemSettings().openAtLogin; if (on !== !!readSettings().autoStart) writeSettings({ autoStart: on }); } catch {}
-    const replace = () => placeWindow();
+    const replace = () => { resetCalib("monitores mudaram"); placeWindow(); };
     screen.on("display-metrics-changed", replace);
     screen.on("display-added", replace);
     screen.on("display-removed", replace);

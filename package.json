@@ -1,7 +1,7 @@
 {
   "name": "kon",
   "productName": "Kon",
-  "version": "1.3.12",
+  "version": "1.3.13",
   "description": "Kon — Dynamic Island / notch para Windows: Gemini + Claude, Smart OCR nativo, gaveta de arquivos, mídia, câmbio, clima.",
   "private": true,
   "main": "electron/main.js",
