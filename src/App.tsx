@@ -966,7 +966,9 @@ export default function KonIsland() {
       if (!raf) raf = requestAnimationFrame(() => { raf = 0; bridge.cursor?.(px, py); });
       const n = performance.now(); if (n - lastMove < 400) return; lastMove = n; bridge.diag?.({ e: "mouse", x: Math.round(e.clientX), y: Math.round(e.clientY) });
     };
-    const out = (e) => { if (!e.relatedTarget) bridge.cursor?.(null); }; // saiu da janela: o main volta a usar o cursor do sistema
+    // "mouseout" sem destino acontece também quando o Windows troca o click-through ou aparece uma dica (title):
+    // não descarta a posição; o main só a usa enquanto o cursor do sistema estiver parado no mesmo ponto
+    const out = () => {};
     document.addEventListener("pointerdown", down, true);
     document.addEventListener("mousemove", move, true);
     document.addEventListener("mouseout", out, true);

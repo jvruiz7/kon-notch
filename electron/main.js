@@ -264,9 +264,15 @@ const insideRects = (x, y) => hitRects.some((r) => x >= r.x && x <= r.x + r.w &&
 // cursor do sistema → coordenadas da página (CSS px). Se a página não tiver o mesmo tamanho da janela
 // (escala dupla do Windows com monitores de DPI diferentes, zoom), converte pela proporção real.
 function systemRel() {
-  const p = screen.getCursorScreenPoint(); const b = win.getBounds();
-  const kx = viewport?.vw && b.width ? viewport.vw / b.width : 1, ky = viewport?.vh && b.height ? viewport.vh / b.height : 1;
-  return { x: (p.x - b.x) * kx, y: (p.y - b.y) * ky };
+  const b = win.getBounds();
+  let p = screen.getCursorScreenPoint(), r = b;
+  // Windows com monitores de escalas diferentes: os "DIPs" do cursor e da janela podem vir de escalas diferentes
+  // (vimos erros de até ~150 px). Em pixels físicos os dois ficam no mesmo espaço.
+  if (process.platform === "win32") {
+    try { p = screen.dipToScreenPoint(p); r = screen.dipToScreenRect(win, b); } catch { p = screen.getCursorScreenPoint(); r = b; }
+  }
+  const kx = viewport?.vw && r.width ? viewport.vw / r.width : 1, ky = viewport?.vh && r.height ? viewport.vh / r.height : 1;
+  return { x: (p.x - r.x) * kx, y: (p.y - r.y) * ky };
 }
 function hitTick() {
   if (!win || win.isDestroyed() || !win.isVisible()) return;
@@ -1138,7 +1144,7 @@ function startUpdater() {
   autoUpdater.on("error", (e) => { const message = String(e?.message || e).split("\n")[0]; updLog("error", message); setUpdStatus({ state: "error", message }); });
   const check = () => { if (readSettings().autoUpdate !== false) checkAll().catch((e) => updLog("error", e.message)); };
   setTimeout(check, 20e3);
-  setInterval(check, 4 * 3600e3);
+  setInterval(check, 30 * 60e3); // a cada 30 min
 }
 /* Atualização pequena: quando só o app mudou (mesmo Electron), baixa o app.asar compactado (~7 MB)
    em vez do instalador inteiro (~115 MB). Quando o Electron muda, usa o instalador completo. */
