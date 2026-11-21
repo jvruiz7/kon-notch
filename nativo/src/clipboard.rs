@@ -11,7 +11,7 @@ const MAX: usize = 40;
 pub struct Clip { pub id: u64, pub text: String, pub at: i64, pub pinned: bool }
 
 #[derive(Default)]
-pub struct State { pub list: Vec<Clip>, pub on: bool, last: String, skip_next: Option<String> }
+pub struct State { pub list: Vec<Clip>, pub on: bool, last: String, skip_next: Option<String>, suspend_until: Option<std::time::Instant> }
 
 pub type Shared = Arc<Mutex<State>>;
 
@@ -53,6 +53,7 @@ pub fn start(on: bool, repaint: impl Fn() + Send + 'static) -> Shared {
             let Some(c) = cb.as_mut() else { continue };
             let Ok(t) = c.get_text() else { continue };
             let mut g = s2.lock().unwrap();
+            if g.suspend_until.map_or(false, |u| std::time::Instant::now() < u) { g.last = t; continue; }
             if t == g.last { continue; }
             g.last = t.clone();
             if g.skip_next.take().as_deref() == Some(t.as_str()) { continue; }
@@ -98,3 +99,8 @@ mod t {
         assert!(!s("olá mundo")); assert!(!s("https://Exemplo.com/A1b2c3d4e5")); assert!(!s("12345")); assert!(!s("reunião às 15h"));
     }
 }
+
+/// Ler/escrever a área de transferência sem que isso entre no histórico (usado pelo Ctrl+Alt+R).
+pub fn suspend(st: &Shared, ms: u64) { st.lock().unwrap().suspend_until = Some(std::time::Instant::now() + std::time::Duration::from_millis(ms)); }
+pub fn read_text() -> String { arboard::Clipboard::new().and_then(|mut c| c.get_text()).unwrap_or_default() }
+pub fn write_text(t: &str) { let _ = arboard::Clipboard::new().and_then(|mut c| c.set_text(t.to_string())); }

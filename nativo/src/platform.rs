@@ -64,6 +64,16 @@ mod imp {
         }
     }
 
+    /// Manda Ctrl+<tecla> para o programa em primeiro plano (o Kon não pega o foco).
+    /// Solta antes o Alt (você ainda está segurando Ctrl+Alt+R), senão viraria Ctrl+Alt+C.
+    pub fn send_ctrl(key: u8) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::*;
+        let k = |vk: VIRTUAL_KEY, up: bool| INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: if up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 } } };
+        let c = VIRTUAL_KEY(key as u16);
+        let seq = [k(VK_MENU, true), k(VK_LMENU, true), k(VK_RMENU, true), k(VK_SHIFT, true), k(VK_CONTROL, false), k(c, false), k(c, true), k(VK_CONTROL, true)];
+        unsafe { SendInput(&seq, std::mem::size_of::<INPUT>() as i32); }
+    }
+
     /// Esconde o Kon da barra de tarefas e do Alt+Tab, e o mantém acima de tudo.
     pub fn make_tool_window() {
         if let Some(h) = hwnd() {
@@ -100,6 +110,7 @@ mod imp {
     pub fn primary_work_area() -> PxRect { PxRect { x: 0, y: 0, w: 1920, h: 1080 } }
     pub fn make_tool_window() {}
     pub fn place(_follow_cursor: bool) -> bool { false }
+    pub fn send_ctrl(_key: u8) {}
     pub fn set_focusable(_on: bool) {}
     pub fn data_dir() -> std::path::PathBuf { std::env::temp_dir().join("kon-nativo") }
 }

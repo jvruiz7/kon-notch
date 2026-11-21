@@ -25,7 +25,7 @@ pub struct Ask {
 impl Default for Ask { fn default() -> Self { Ask { id: 0, phase: Phase::Idle, question: String::new(), answer: String::new(), error: None, sources: vec![], fell_back: None, history: vec![], new_model: None, tokens: 0 } } }
 pub type Shared = Arc<Mutex<Ask>>;
 
-pub struct Req { pub provider: String, pub key: String, pub model: String, pub web: bool }
+pub struct Req { pub provider: String, pub key: String, pub model: String, pub web: bool, pub system: String }
 
 pub fn ask(st: &Shared, q: String, req: Req, repaint: impl Fn() + Send + 'static) {
     let id = {
@@ -63,7 +63,7 @@ pub fn ask(st: &Shared, q: String, req: Req, repaint: impl Fn() + Send + 'static
 pub fn cancel(st: &Shared) { let mut g = st.lock().unwrap(); g.id += 1; *g = Ask { id: g.id, ..Default::default() }; }
 
 struct Out { sources: Vec<(String, String)>, fell_back: Option<(String, String)>, tokens: u64 }
-type E = (String, String);
+pub type E = (String, String);
 
 fn http_err(e: ureq::Error) -> E {
     match e {
@@ -87,7 +87,7 @@ fn sse(reader: impl std::io::Read, alive: &dyn Fn() -> bool, mut on: impl FnMut(
 
 fn gemini(req: &Req, model: &str, h: &[Msg], on_text: &dyn Fn(&str), alive: &dyn Fn() -> bool) -> Result<Out, E> {
     let contents: Vec<Value> = h.iter().map(|m| json!({"role": if m.user { "user" } else { "model" }, "parts": [{"text": m.text}]})).collect();
-    let mut body = json!({"contents": contents, "systemInstruction": {"parts": [{"text": SYSTEM}]}});
+    let mut body = json!({"contents": contents, "systemInstruction": {"parts": [{"text": req.system}]}});
     if req.web { body["tools"] = json!([{"google_search": {}}]); }
     let url = format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse");
     let r = ureq::post(&url).set("x-goog-api-key", &req.key).timeout(Duration::from_secs(90)).send_json(body).map_err(http_err)?;
@@ -138,7 +138,7 @@ fn discover_flash(key: &str) -> Result<String, E> {
 
 fn claude(req: &Req, h: &[Msg], on_text: &dyn Fn(&str), alive: &dyn Fn() -> bool) -> Result<Out, E> {
     let msgs: Vec<Value> = h.iter().map(|m| json!({"role": if m.user { "user" } else { "assistant" }, "content": m.text})).collect();
-    let body = json!({"model": req.model, "max_tokens": 1200, "system": SYSTEM, "messages": msgs, "stream": true});
+    let body = json!({"model": req.model, "max_tokens": 1200, "system": req.system, "messages": msgs, "stream": true});
     let r = ureq::post("https://api.anthropic.com/v1/messages").set("x-api-key", &req.key).set("anthropic-version", "2023-06-01")
         .timeout(Duration::from_secs(90)).send_json(body).map_err(http_err)?;
     let mut tokens = 0u64; let mut err = None;
@@ -151,6 +151,20 @@ fn claude(req: &Req, h: &[Msg], on_text: &dyn Fn(&str), alive: &dyn Fn() -> bool
     });
     if let Some(e) = err { return Err(e); }
     Ok(Out { sources: vec![], fell_back: None, tokens })
+}
+
+/// Pedido único (tradução, ações no texto): devolve o texto inteiro numa thread e chama `done`.
+pub fn once(req: Req, text: String, done: impl FnOnce(Result<String, E>, u64, Option<String>) + Send + 'static) {
+    std::thread::spawn(move || {
+        let h = vec![Msg { user: true, text }];
+        let out = Mutex::new(String::new());
+        let on = |t: &str| out.lock().unwrap().push_str(t);
+        let r = if req.key.is_empty() { Err(("NO_KEY".to_string(), String::new())) } else if req.provider == "claude" { claude(&req, &h, &on, &|| true) } else { gemini_with_fallback(&req, &h, &on, &|| true) };
+        match r {
+            Ok(o) => done(Ok(out.into_inner().unwrap()), o.tokens, o.fell_back.map(|f| f.1)),
+            Err(e) => done(Err(e), 0, None),
+        }
+    });
 }
 
 /// Tokens do chat do próprio Kon por dia (aparece na aba Uso do Claude Code).

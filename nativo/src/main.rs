@@ -9,6 +9,7 @@ mod icons;
 mod inuse;
 mod media;
 mod tasks;
+mod translate;
 mod usage;
 mod weather;
 mod platform;
@@ -41,7 +42,7 @@ fn main() -> eframe::Result<()> {
             .with_resizable(false)
             .with_always_on_top()
             .with_taskbar(false)
-            .with_mouse_passthrough(true),
+            .with_mouse_passthrough(cfg!(windows)),
         vsync: true,
         renderer,
         ..Default::default()

@@ -12,6 +12,7 @@ use crate::clipboard;
 use crate::ai;
 use crate::hotkeys::{self, Hot};
 use crate::secrets;
+use crate::translate as tr;
 use crate::inuse::{self, InUse};
 use crate::usage;
 use crate::quick::{self, Quick};
@@ -33,7 +34,7 @@ const DAYS: [&str; 7] = ["DOM", "SEG", "TER", "QUA", "QUI", "SEX", "SÁB"];
 const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AGO", "SET", "OUT", "NOV", "DEZ"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum View { Compact, Panel, Perm, Sheet, Ask }
+enum View { Compact, Panel, Perm, Sheet, Ask, Translate, TextAct }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page { Sleep, Lock, Home, Quick, Water, Claude, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
@@ -63,6 +64,13 @@ impl Spring {
 }
 
 /// Estado compartilhado com a thread que vigia o cursor (a janela é "fantasma" quando o mouse está fora do notch).
+#[derive(Clone, Default)]
+struct Tr { text: String, src: String, tgt: String, out: Option<String>, detected: Option<String>, status: u8, engine: String, req: u64, edited: Option<Instant>, sent: String }
+// status: 0 parado, 1 traduzindo, 2 pronto, 3 erro
+#[derive(Clone, Default)]
+struct TextAct { text: String, error: String, action: String, status: u8, result: String, req: u64 }
+// status: 0 escolhendo, 1 trabalhando, 2 pronto, 3 erro
+
 #[derive(Default)]
 struct Hit { rect: Option<Rect>, ppp: f32, inside: bool, compact: bool, follow: bool }
 
@@ -115,6 +123,8 @@ pub struct KonApp {
     key_in: [String; 2],
     model_in: [String; 2],
     copied_at: Option<Instant>,
+    tr: Arc<Mutex<Tr>>,
+    ta: Arc<Mutex<TextAct>>,
     art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
@@ -146,7 +156,7 @@ impl KonApp {
             page: Page::from(&std::env::var("KON_PAGE").unwrap_or_else(|_| settings.page.clone())),
             settings, media,
             // KON_DEMO=painel abre já com o painel (só para capturas de teste)
-            view: match std::env::var("KON_DEMO").as_deref() { Ok("painel") => View::Panel, Ok("ajustes") => View::Sheet, Ok("perguntar") => View::Ask, _ => View::Compact },
+            view: match std::env::var("KON_DEMO").as_deref() { Ok("painel") => View::Panel, Ok("traduzir") => View::Translate, Ok("texto") => View::TextAct, Ok("ajustes") => View::Sheet, Ok("perguntar") => View::Ask, _ => View::Compact },
             w: Spring::new(COMPACT.x), h: Spring::new(COMPACT.y),
             hit, passthrough: true,
             hover_since: None, leave_since: None,
@@ -154,7 +164,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_pages: std::env::var("KON_SHEET").as_deref() == Ok("pages"), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: String::new(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -165,6 +175,11 @@ impl KonApp {
             View::Panel => PANEL,
             View::Perm => vec2(470.0, 100.0),
             View::Sheet => vec2(440.0, 470.0),
+            View::Translate => vec2(560.0, 250.0),
+            View::TextAct => {
+                let t = self.ta.lock().unwrap();
+                vec2(540.0, if !t.error.is_empty() { 52.0 } else { match t.status { 0 => 98.0, 1 => 120.0, _ => (128.0 + ((t.result.chars().count() as f32 / 70.0).ceil() + t.result.matches('\n').count() as f32).min(6.0) * 18.0).min(250.0) } })
+            }
             View::Ask => {
                 let g = self.ask.lock().unwrap();
                 if g.phase == ai::Phase::Idle { vec2(540.0, 46.0) } else { vec2(540.0, (46.0 + 44.0 + 24.0 + self.ask_rows * 18.0 + if g.sources.is_empty() { 0.0 } else { 30.0 }).clamp(160.0, 360.0)) }
@@ -226,7 +241,7 @@ impl eframe::App for KonApp {
             h.follow = self.settings.display == "cursor";
             if cfg!(windows) { h.inside } else { ctx.input(|i| i.pointer.hover_pos()).map_or(false, |p| island.contains(p)) }
         };
-        if self.passthrough == inside {
+        if self.passthrough == inside && cfg!(windows) {
             self.passthrough = !inside;
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(self.passthrough));
         }
@@ -263,12 +278,14 @@ impl eframe::App for KonApp {
 
         // teclado só enquanto há um campo de texto aberto
         if self.view == View::Sheet && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.view = View::Panel; }
-        if self.view == View::Ask && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.view = View::Compact; }
+        if self.floating() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.view = View::Compact; }
+        self.translate_tick(ctx);
         while let Ok(h) = self.hot.try_recv() {
             match h {
                 Hot::Ask => self.open_ask(),
                 Hot::Panel => { self.view = if self.view == View::Panel { View::Compact } else { View::Panel }; }
                 Hot::Clip => { self.page = Page::Clip; self.view = View::Panel; }
+                Hot::Text => self.grab_selection(ctx),
             }
         }
         // terminou de responder: soma os tokens do chat do Kon e guarda o modelo que funcionou
@@ -277,7 +294,7 @@ impl eframe::App for KonApp {
             if g.phase == ai::Phase::Done && g.tokens > 0 { ai::add_kon_tokens(g.tokens); g.tokens = 0; }
             if let Some(m) = g.new_model.take() { self.settings.gemini_model = m; self.settings.save(); }
         }
-        let want_focus = ((self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel) || self.view == View::Sheet || self.view == View::Ask;
+        let want_focus = ((self.adding.is_some() || self.qform.is_some()) && self.view == View::Panel) || self.view == View::Sheet || self.view == View::Ask || self.view == View::Translate;
         if want_focus != self.focusable { self.focusable = want_focus; crate::platform::set_focusable(want_focus); }
         if self.view == View::Compact { self.adding = None; self.editing = false; self.qform = None; self.qedit = false; }
         // aviso de PC sobrecarregado vindo da thread do sistema
@@ -299,7 +316,7 @@ impl eframe::App for KonApp {
 
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
             let rect = self.island_rect();
-            if self.view == View::Ask {
+            if self.floating() {
                 let rad = (rect.height() / 2.0).min(26.0) as u8;
                 ui.painter().rect_filled(rect.translate(vec2(0.0, 10.0)).expand(6.0), CornerRadius::same(rad + 6), Color32::from_black_alpha(60));
                 ui.painter().rect_filled(rect, CornerRadius::same(rad), BG);
@@ -312,7 +329,9 @@ impl eframe::App for KonApp {
             } else if open < 0.35 {
                 self.draw_compact(ui, rect, &m, blink, 1.0 - open / 0.35);
             }
-            if self.view == View::Ask {
+            if self.view == View::Translate { self.draw_translate(ui, rect, blink); }
+            else if self.view == View::TextAct { self.draw_textact(ui, rect, blink); }
+            else if self.view == View::Ask {
                 self.draw_ask(ui, rect, blink);
             } else if self.view == View::Sheet {
                 let a = ((self.h.v - 300.0) / 170.0).clamp(0.0, 1.0);
@@ -343,7 +362,7 @@ impl KonApp {
     fn island_rect(&self) -> Rect {
         let w = self.w.v; let h = self.h.v;
         // Perguntar flutua 12 px abaixo do topo, como no Kon atual
-        Rect::from_min_size(pos2((WIN_W - w) / 2.0, if self.view == View::Ask { 12.0 } else { 0.0 }), vec2(w, h))
+        Rect::from_min_size(pos2((WIN_W - w) / 2.0, if self.floating() { 12.0 } else { 0.0 }), vec2(w, h))
     }
 
     fn draw_compact(&mut self, ui: &mut egui::Ui, r: Rect, m: &MediaState, blink: bool, alpha: f32) {
@@ -531,6 +550,259 @@ impl KonApp {
         self.page_ids().iter().filter(|id| !self.settings.pages_off.contains(id)).map(|id| Page::from(id)).collect()
     }
 
+    fn floating(&self) -> bool { matches!(self.view, View::Ask | View::Translate | View::TextAct) }
+
+    /// IA para pedidos únicos: a escolhida, ou a que tiver chave.
+    fn once_req(&self, system: &str) -> Option<ai::Req> {
+        let has = |p: &str| !self.key_for(p).is_empty();
+        let pv = if has(&self.settings.provider) { self.settings.provider.clone() } else if has("gemini") { "gemini".into() } else if has("claude") { "claude".into() } else { return None };
+        Some(ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: false, provider: pv, system: system.into() })
+    }
+
+    fn open_translate(&mut self, text: String) {
+        let mut t = self.tr.lock().unwrap();
+        let tgt = t.tgt.clone();
+        *t = Tr { text, src: "Detect".into(), tgt, req: t.req + 1, edited: Some(Instant::now()), ..Default::default() };
+        drop(t);
+        self.view = View::Translate;
+    }
+    /// Traduz 500 ms depois da última mudança (no texto ou nos idiomas), como no Kon atual.
+    fn translate_tick(&mut self, ctx: &egui::Context) {
+        if self.view != View::Translate { return; }
+        let mut t = self.tr.lock().unwrap();
+        let Some(ed) = t.edited else { return };
+        if t.text.trim().is_empty() { t.req += 1; t.out = None; t.detected = None; t.status = 0; t.edited = None; return; }
+        if ed.elapsed() < Duration::from_millis(500) { t.status = 1; ctx.request_repaint_after(Duration::from_millis(520) - ed.elapsed()); return; }
+        t.edited = None; t.status = 1; t.req += 1;
+        let (id, text, src, tgt) = (t.req, t.text.clone(), t.src.clone(), t.tgt.clone());
+        drop(t);
+        let local = move |st: &mut Tr| {
+            let det = if src == "Detect" { tr::detect(&text).to_string() } else { src.clone() };
+            st.detected = Some(det.clone()); st.engine = "local".into();
+            match tr::local(&text, &det, &tgt) { Some(o) => { st.out = Some(o); st.status = 2; } None => { st.out = Some("Sem tradução offline para este texto. Adicione uma chave do Gemini ou do Claude em Configurações para traduzir qualquer coisa.".into()); st.status = 3; } }
+        };
+        match self.once_req(tr::SYSTEM) {
+            None => { let mut g = self.tr.lock().unwrap(); local(&mut g); }
+            Some(req) => {
+                let engine = if req.provider == "claude" { "Claude" } else { "Gemini" };
+                let st = self.tr.clone(); let c = ctx.clone();
+                let prompt = tr::prompt(&src2(&self.tr), &self.tr.lock().unwrap().tgt.clone(), &self.tr.lock().unwrap().text.clone());
+                ai::once(req, prompt, move |r, tokens, _| {
+                    ai::add_kon_tokens(tokens);
+                    let mut g = st.lock().unwrap();
+                    if g.req != id { return; }
+                    match r.ok().and_then(|t| tr::parse(&t)) {
+                        Some((det, out)) => { g.detected = det; g.out = Some(out); g.engine = engine.into(); g.status = 2; }
+                        None => local(&mut g),
+                    }
+                    drop(g); c.request_repaint();
+                });
+            }
+        }
+        fn src2(t: &Arc<Mutex<Tr>>) -> String { t.lock().unwrap().src.clone() }
+    }
+
+    fn draw_translate(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
+        let p = ui.painter().clone();
+        let inner = r.shrink2(vec2(16.0, 0.0));
+        let mut t = self.tr.lock().unwrap().clone();
+        let hy = r.top() + 22.0;
+        draw_tofu_mood(&p, pos2(inner.left() + 12.0, hy), 0.82, blink, 1.0, t.status == 3);
+        p.text(pos2(inner.left() + 32.0, hy), Align2::LEFT_CENTER, "Traduzir", bold(14.0), Color32::WHITE);
+        let xr = Rect::from_center_size(pos2(inner.right() - 14.0, hy), vec2(28.0, 28.0));
+        let xresp = ui.interact(xr, ui.id().with("trx"), Sense::click());
+        if xresp.hovered() { p.circle_filled(xr.center(), 14.0, Color32::from_white_alpha(25)); }
+        p.text(xr.center(), Align2::CENTER_CENTER, ic::X, icon_font(15.0), Color32::from_white_alpha(if xresp.hovered() { 255 } else { 128 }));
+        let lb = pos2(xr.left() - 20.0, hy);
+        p.circle_filled(lb, 18.0, Color32::from_rgba_unmultiplied(59, 130, 246, 50));
+        p.circle_filled(lb, 14.0, Color32::from_rgb(59, 130, 246));
+        p.text(lb, Align2::CENTER_CENTER, ic::LANGUAGES, icon_font(14.0), Color32::WHITE);
+        if xresp.clicked() { self.view = View::Compact; return; }
+        // idiomas
+        let ly = r.top() + 44.0 + 15.0;
+        let cw = (inner.width() - 28.0 - 16.0) / 2.0;
+        let srcl = if t.src == "Detect" { match (&t.detected, t.text.trim().is_empty()) { (Some(d), false) => format!("Detectar · {}", tr::pt(d)), _ => "Detectar idioma".into() } } else { tr::pt(&t.src).to_string() };
+        let mut changed = false;
+        for (k, (label, x)) in [(srcl, inner.left()), (tr::pt(&t.tgt).to_string(), inner.right() - cw)].into_iter().enumerate() {
+            let cr = Rect::from_min_size(pos2(x, ly - 14.0), vec2(cw, 28.0));
+            p.rect_filled(cr, CornerRadius::same(8), Color32::from_white_alpha(13));
+            p.rect_stroke(cr, CornerRadius::same(8), Stroke::new(1.0_f32, Color32::from_white_alpha(15)), egui::StrokeKind::Inside);
+            p.text(cr.center(), Align2::CENTER_CENTER, ellipsize_w(ui, &label, 12.0, cw - 50.0), FontId::proportional(12.0), Color32::from_white_alpha(230));
+            for (d, ch, cx) in [(-1i32, ic::CHEVRON_LEFT, cr.left() + 14.0), (1, ic::CHEVRON_RIGHT, cr.right() - 14.0)] {
+                let br = Rect::from_center_size(pos2(cx, ly), vec2(20.0, 20.0));
+                let rsp = ui.interact(br, ui.id().with(("trc", k, d)), Sense::click());
+                p.text(br.center(), Align2::CENTER_CENTER, ch, icon_font(14.0), Color32::from_white_alpha(if rsp.hovered() { 255 } else { 102 }));
+                if rsp.clicked() {
+                    let cycle = |list: &[&str], cur: &str| { let i = list.iter().position(|x| *x == cur).unwrap_or(0) as i32; list[((i + d).rem_euclid(list.len() as i32)) as usize].to_string() };
+                    if k == 0 { let mut l = vec!["Detect"]; l.extend(tr::LANGS); t.src = cycle(&l, &t.src); } else { t.tgt = cycle(&tr::TARGETS, &t.tgt); }
+                    changed = true;
+                }
+            }
+        }
+        let sw = pos2(inner.center().x, ly);
+        let swr = Rect::from_center_size(sw, vec2(28.0, 28.0));
+        let swresp = ui.interact(swr, ui.id().with("trswap"), Sense::click());
+        p.circle_filled(sw, 14.0, Color32::from_white_alpha(if swresp.hovered() { 38 } else { 20 }));
+        p.text(sw, Align2::CENTER_CENTER, ic::ARROW_LEFT_RIGHT, icon_font(13.0), Color32::from_white_alpha(204));
+        if swresp.clicked() {
+            let from = if t.src == "Detect" { t.detected.clone().unwrap_or("English".into()) } else { t.src.clone() };
+            if t.status == 2 { if let Some(o) = t.out.clone() { t.text = o; } }
+            t.src = t.tgt.clone();
+            t.tgt = if tr::TARGETS.contains(&from.as_str()) { from } else { "English".into() };
+            changed = true;
+        }
+        // caixas
+        let by = ly + 14.0 + 10.0;
+        let bh = r.bottom() - 34.0 - by;
+        let bw = (inner.width() - 10.0) / 2.0;
+        let a = Rect::from_min_size(pos2(inner.left(), by), vec2(bw, bh));
+        let b = Rect::from_min_size(pos2(a.right() + 10.0, by), vec2(bw, bh));
+        for x in [a, b] { p.rect_filled(x, CornerRadius::same(12), Color32::from_white_alpha(10)); p.rect_stroke(x, CornerRadius::same(12), Stroke::new(1.0_f32, Color32::from_white_alpha(20)), egui::StrokeKind::Inside); }
+        let before = t.text.clone();
+        let te = egui::TextEdit::multiline(&mut t.text).hint_text("Digite ou cole um texto").frame(false).font(FontId::proportional(13.0)).text_color(Color32::WHITE).char_limit(800).desired_width(bw - 24.0).desired_rows(4);
+        let resp = ui.put(a.shrink(12.0).with_max_y(a.bottom() - 18.0), te);
+        if !resp.has_focus() && ui.memory(|m| m.focused().is_none()) { resp.request_focus(); }
+        // Enter traduz já; Shift+Enter quebra a linha
+        let enter = resp.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+        if enter && t.text.ends_with('\n') && !before.ends_with('\n') { t.text.pop(); }
+        if t.text != before { changed = true; }
+        p.text(pos2(a.right() - 10.0, a.bottom() - 10.0), Align2::RIGHT_CENTER, format!("{}/800", t.text.chars().count()), FontId::monospace(10.0), Color32::from_white_alpha(90));
+        if changed || enter { t.edited = Some(if enter { Instant::now() - Duration::from_millis(600) } else { Instant::now() }); t.status = if t.text.trim().is_empty() { 0 } else { 1 }; }
+        let (status, out, engine) = (t.status, t.out.clone(), t.engine.clone());
+        { let mut g = self.tr.lock().unwrap(); g.text = t.text.clone(); g.src = t.src.clone(); g.tgt = t.tgt.clone(); if changed || enter { g.edited = t.edited; g.status = t.status; } }
+        let ob = b.shrink(12.0);
+        match status {
+            1 => { let dots = ".".repeat(1 + ((ui.input(|i| i.time) * 3.0) as usize % 3)); p.text(ob.left_top(), Align2::LEFT_TOP, format!("Traduzindo{dots}"), FontId::proportional(13.0), Color32::from_white_alpha(115)); ui.ctx().request_repaint_after(Duration::from_millis(150)); }
+            2 | 3 => {
+                let col = if status == 3 { Color32::from_rgba_unmultiplied(253, 230, 138, 230) } else { Color32::WHITE };
+                let mut job = egui::text::LayoutJob::single_section(out.clone().unwrap_or_default(), egui::TextFormat { font_id: FontId::proportional(13.0), color: col, line_height: Some(19.0), ..Default::default() });
+                job.wrap.max_width = ob.width();
+                let g = ui.fonts_mut(|f| f.layout_job(job));
+                p.with_clip_rect(b.shrink(4.0)).galley(ob.left_top(), g, col);
+                if status == 2 {
+                    let copied = self.copied_at.map_or(false, |c| c.elapsed() < Duration::from_millis(1500));
+                    let cr = Rect::from_min_size(pos2(b.right() - 76.0, b.bottom() - 30.0), vec2(68.0, 24.0));
+                    let rsp = ui.interact(cr, ui.id().with("trcopy"), Sense::click());
+                    p.rect_filled(cr, CornerRadius::same(6), if rsp.hovered() { Color32::from_white_alpha(25) } else { Color32::from_black_alpha(102) });
+                    p.text(pos2(cr.left() + 12.0, cr.center().y), Align2::LEFT_CENTER, if copied { ic::CHECK } else { ic::COPY }, icon_font(11.0), if copied { Color32::from_rgb(52, 211, 153) } else { Color32::from_white_alpha(153) });
+                    p.text(pos2(cr.left() + 27.0, cr.center().y), Align2::LEFT_CENTER, "Copiar", FontId::proportional(11.0), Color32::from_white_alpha(if rsp.hovered() { 255 } else { 153 }));
+                    if rsp.clicked() { ui.ctx().copy_text(out.unwrap_or_default()); self.copied_at = Some(Instant::now()); }
+                    if copied { ui.ctx().request_repaint_after(Duration::from_millis(300)); }
+                }
+            }
+            _ => { p.text(ob.left_top(), Align2::LEFT_TOP, "Tradução", FontId::proportional(13.0), Color32::from_white_alpha(64)); }
+        }
+        let foot = if status == 2 { if engine == "local" { "Tradução local (offline)".to_string() } else { format!("Traduzido por {engine}") } } else { "Enter traduz · Shift+Enter nova linha · Esc fecha".into() };
+        p.text(pos2(r.center().x, r.bottom() - 17.0), Align2::CENTER_CENTER, foot, FontId::proportional(11.0), Color32::from_white_alpha(115));
+    }
+
+    /// Ctrl+Alt+R: copia o texto selecionado no programa da frente (sem tirar o foco dele), devolve a sua
+    /// área de transferência como estava e abre as ações. Nada vai para o histórico.
+    fn grab_selection(&mut self, ctx: &egui::Context) {
+        clipboard::suspend(&self.clips, 2500);
+        let before = clipboard::read_text();
+        clipboard::write_text("");
+        crate::platform::send_ctrl(b'C');
+        let mut text = String::new();
+        for _ in 0..20 { std::thread::sleep(Duration::from_millis(40)); text = clipboard::read_text(); if !text.is_empty() { break; } }
+        clipboard::write_text(&before);
+        let mut t = self.ta.lock().unwrap();
+        let id = t.req + 1;
+        *t = if text.trim().is_empty() { TextAct { error: "Selecione um texto em qualquer programa e aperte Ctrl+Alt+R".into(), req: id, ..Default::default() } }
+            else { TextAct { text: text.chars().take(12000).collect(), req: id, ..Default::default() } };
+        drop(t);
+        self.view = View::TextAct;
+        ctx.request_repaint();
+    }
+
+    fn draw_textact(&mut self, ui: &mut egui::Ui, r: Rect, blink: bool) {
+        const ACTIONS: [(&str, &str, &str); 6] = [
+            ("resumir", "Resumir", "Resuma o texto abaixo em português, em até 3 frases curtas."),
+            ("traduzir", "Traduzir", "Se o texto abaixo estiver em português, traduza para o inglês; se estiver em outro idioma, traduza para o português do Brasil. Mantenha o tom e a formatação."),
+            ("corrigir", "Corrigir", "Corrija ortografia, gramática e pontuação do texto abaixo, mantendo o idioma, o tom e a formatação."),
+            ("formal", "Mais formal", "Reescreva o texto abaixo em tom mais formal e profissional, no mesmo idioma."),
+            ("curto", "Mais curto", "Reescreva o texto abaixo mais curto e direto, no mesmo idioma, sem perder o sentido."),
+            ("explicar", "Explicar", "Explique em português, de forma simples, o que o texto abaixo quer dizer."),
+        ];
+        let p = ui.painter().clone();
+        let t = self.ta.lock().unwrap().clone();
+        let inner = Rect::from_min_max(pos2(r.left() + 16.0, r.top() + 10.0), pos2(r.right() - 16.0, r.bottom() - 10.0));
+        let hy = inner.top() + 15.0;
+        draw_tofu_mood(&p, pos2(inner.left() + 11.0, hy), 0.8, blink, 1.0, !t.error.is_empty() || t.status == 3);
+        let tx = inner.left() + 32.0;
+        let xr = Rect::from_center_size(pos2(inner.right() - 12.0, hy), vec2(24.0, 24.0));
+        let xresp = ui.interact(xr, ui.id().with("tax"), Sense::click());
+        if xresp.hovered() { p.circle_filled(xr.center(), 12.0, Color32::from_white_alpha(25)); }
+        p.text(xr.center(), Align2::CENTER_CENTER, ic::X, icon_font(13.0), Color32::from_white_alpha(if xresp.hovered() { 255 } else { 128 }));
+        if xresp.clicked() { self.view = View::Compact; return; }
+        if !t.error.is_empty() { p.text(pos2(tx, hy), Align2::LEFT_CENTER, &t.error, bold(12.5), Color32::WHITE); return; }
+        p.text(pos2(tx, hy - 7.0), Align2::LEFT_CENTER, "Texto selecionado", bold(12.5), Color32::WHITE);
+        let one = t.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let one = if self.settings.privacy { mask(&one) } else { one };
+        p.text(pos2(tx, hy + 8.0), Align2::LEFT_CENTER, ellipsize_w(ui, &one, 11.0, xr.left() - tx - 8.0), FontId::proportional(11.0), Color32::from_white_alpha(115));
+        // ações
+        let mut x = inner.left(); let ay = inner.top() + 30.0 + 8.0 + 13.0;
+        let mut run: Option<usize> = None;
+        for (i, (id, label, _)) in ACTIONS.iter().enumerate() {
+            let w = text_w(ui, label, 11.5) + 20.0;
+            let br = Rect::from_min_size(pos2(x, ay - 13.0), vec2(w, 26.0));
+            let rsp = ui.interact(br, ui.id().with(("ta", i)), Sense::click());
+            let on = t.action == *id;
+            p.rect_filled(br, CornerRadius::same(13), if on { Color32::WHITE } else { Color32::from_white_alpha(if rsp.hovered() { 36 } else { 20 }) });
+            p.text(br.center(), Align2::CENTER_CENTER, *label, FontId::proportional(11.5), if on { Color32::BLACK } else { Color32::from_white_alpha(204) });
+            if rsp.clicked() && t.status != 1 { run = Some(i); }
+            x += w + 6.0;
+        }
+        if let Some(i) = run {
+            let (id, _, instr) = ACTIONS[i];
+            let mut g = self.ta.lock().unwrap();
+            g.action = id.into(); g.req += 1; let req_id = g.req;
+            match self.once_req("Você edita textos para o usuário. Responda somente com o texto final, sem aspas, sem comentários e sem explicar o que fez (exceto quando pedirem uma explicação).") {
+                None => { g.status = 3; g.result = "Adicione uma chave do Gemini ou do Claude em Ajustes.".into(); }
+                Some(req) => {
+                    g.status = 1; g.result.clear();
+                    let text = format!("{instr}\n\n\"\"\"\n{}\n\"\"\"", g.text);
+                    let st = self.ta.clone(); let c = ui.ctx().clone();
+                    ai::once(req, text, move |res, tokens, _| {
+                        ai::add_kon_tokens(tokens);
+                        let mut g = st.lock().unwrap();
+                        if g.req != req_id { return; }
+                        match res { Ok(s) => { g.status = 2; g.result = s.trim().trim_start_matches("\"\"\"").trim_end_matches("\"\"\"").trim().to_string(); }
+                            Err((code, msg)) => { g.status = 3; g.result = if code == "NO_KEY" { "Adicione sua chave em Ajustes.".into() } else if msg.is_empty() { "Não deu certo.".into() } else { msg }; } }
+                        drop(g); c.request_repaint();
+                    });
+                }
+            }
+        }
+        let t = self.ta.lock().unwrap().clone();
+        let ry = ay + 13.0 + 10.0;
+        if t.status == 1 {
+            let dots = ".".repeat(1 + ((ui.input(|i| i.time) * 3.0) as usize % 3));
+            p.text(pos2(inner.left(), ry + 8.0), Align2::LEFT_CENTER, format!("Escrevendo{dots}"), FontId::proportional(12.0), Color32::from_white_alpha(115));
+            ui.ctx().request_repaint_after(Duration::from_millis(150));
+        }
+        if t.status >= 2 {
+            let col = if t.status == 3 { Color32::from_rgba_unmultiplied(253, 230, 138, 230) } else { Color32::WHITE };
+            let mut job = egui::text::LayoutJob::single_section(t.result.clone(), egui::TextFormat { font_id: FontId::proportional(12.5), color: col, line_height: Some(18.0), ..Default::default() });
+            job.wrap.max_width = inner.width();
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            let area = Rect::from_min_max(pos2(inner.left(), ry), pos2(inner.right(), inner.bottom() - if t.status == 2 { 32.0 } else { 0.0 }));
+            p.with_clip_rect(area).galley(area.left_top(), g, col);
+            if t.status == 2 {
+                let by = inner.bottom() - 12.0;
+                let mut rx = inner.right();
+                if t.action != "explicar" && small_pill(ui, &p, &mut rx, by, Some(ic::CHECK), "Colar no lugar", true, 1.0) {
+                    // escreve o resultado e manda Ctrl+V para o mesmo programa (o Kon não tem o foco)
+                    clipboard::suspend(&self.clips, 1500);
+                    clipboard::write_text(&t.result);
+                    self.view = View::Compact;
+                    std::thread::spawn(|| { std::thread::sleep(Duration::from_millis(120)); crate::platform::send_ctrl(b'V'); });
+                }
+                if small_pill(ui, &p, &mut rx, by, Some(ic::COPY), "Copiar", false, 1.0) { ui.ctx().copy_text(t.result.clone()); self.toast("Copiado"); self.view = View::Compact; }
+            }
+        }
+    }
+
     fn open_ask(&mut self) {
         ai::cancel(&self.ask);
         self.ask_q.clear(); self.ask_rows = 0.0;
@@ -544,7 +816,7 @@ impl KonApp {
         if q.is_empty() { return; }
         self.ask_q.clear();
         let pv = self.settings.provider.clone();
-        let req = ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: pv == "gemini" && self.settings.web_search, provider: pv };
+        let req = ai::Req { key: self.key_for(&pv), model: if pv == "claude" { self.settings.claude_model.clone() } else { self.settings.gemini_model.clone() }, web: pv == "gemini" && self.settings.web_search, provider: pv, system: ai::SYSTEM.into() };
         let c = ctx.clone();
         ai::ask(&self.ask, q, req, move || c.request_repaint());
     }
@@ -575,6 +847,7 @@ impl KonApp {
         let te = egui::TextEdit::singleline(&mut self.ask_q).hint_text(egui::RichText::new(hint).color(Color32::from_white_alpha(90))).frame(false).font(FontId::proportional(14.5)).text_color(Color32::WHITE).desired_width(fr.width());
         let resp = ui.put(fr, te);
         if !resp.has_focus() && ui.memory(|m| m.focused().is_none()) { resp.request_focus(); }
+        if resp.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab)) { let q = std::mem::take(&mut self.ask_q); self.open_translate(q); return; }
         let enter = (resp.lost_focus() || resp.has_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if std::env::var("KON_DEBUG").is_ok() && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { .. }))) { eprintln!("keys: focus={} lost={} enter={}", resp.has_focus(), resp.lost_focus(), enter); }
         if enter || srsp.clicked() { self.submit_ask(ui.ctx()); resp.request_focus(); }
