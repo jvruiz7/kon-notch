@@ -8,6 +8,8 @@ use crate::icons as ic;
 use crate::tasks::Tasks;
 use crate::weather::{self, Weather};
 use crate::system::{self, SysInfo};
+use crate::clipboard;
+use crate::stash::{self, Stash};
 use std::sync::atomic::{AtomicBool, Ordering};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, CornerRadius, FontFamily, FontId, Pos2, Rect, Sense, Stroke, Vec2};
 use std::sync::{Arc, Mutex};
@@ -27,13 +29,13 @@ const MONTHS: [&str; 12] = ["JAN", "FEV", "MAR", "ABR", "MAI", "JUN", "JUL", "AG
 enum View { Compact, Panel }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Page { Home, Music, Weather, Focus, Todo, System, Settings }
+enum Page { Home, Files, Clip, Music, Weather, Focus, Todo, System, Settings }
 
 impl Page {
-    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::System => "system", Page::Settings => "settings" } }
-    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "system" => Page::System, _ => Page::Home } }
-    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
-    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
+    fn id(self) -> &'static str { match self { Page::Home => "home", Page::Music => "music", Page::Weather => "weather", Page::Focus => "focus", Page::Todo => "todo", Page::Clip => "clip", Page::Files => "files", Page::System => "system", Page::Settings => "settings" } }
+    fn from(s: &str) -> Page { match s { "music" => Page::Music, "weather" => Page::Weather, "focus" => Page::Focus, "todo" => Page::Todo, "clip" => Page::Clip, "files" => Page::Files, "system" => Page::System, _ => Page::Home } }
+    fn label(self) -> &'static str { match self { Page::Home => "INÍCIO", Page::Music => "MÚSICA", Page::Weather => "CLIMA", Page::Focus => "FOCO", Page::Todo => "TAREFAS", Page::Clip => "CLIPS", Page::Files => "ARQUIVOS", Page::System => "SISTEMA", Page::Settings => "AJUSTES" } }
+    fn icon(self) -> char { match self { Page::Home => ic::LAYOUT_GRID, Page::Music => ic::MUSIC_2, Page::Weather => ic::CLOUD_SUN, Page::Focus => ic::TIMER, Page::Todo => ic::LIST_TODO, Page::Clip => ic::CLIPBOARD_LIST, Page::Files => ic::FOLDER_OPEN, Page::System => ic::CPU, Page::Settings => ic::SETTINGS } }
     /// cor do ícone "ligado" (mesmas do Kon atual)
     fn color(self) -> Color32 { match self { Page::Music => Color32::from_rgb(244, 114, 182), Page::Weather => Color32::from_rgb(56, 189, 248), Page::Focus => Color32::from_rgb(255, 107, 91), Page::Todo => Color32::from_rgb(163, 230, 53), _ => Color32::from_rgb(251, 146, 60) } }
 }
@@ -77,6 +79,12 @@ pub struct KonApp {
     tasks: Tasks,
     sys: Arc<Mutex<SysInfo>>,
     sys_on: Arc<AtomicBool>,
+    clips: clipboard::Shared,
+    clip_scroll: f32,
+    stash: Stash,
+    files_scroll: f32,
+    drop_back: Option<Page>,
+    toast_msg: Option<(String, Instant)>,
     art: Option<(String, egui::TextureHandle)>,
     adding: Option<String>,
     editing: bool,
@@ -96,6 +104,8 @@ impl KonApp {
         let weather = weather::start(move || ctx2.request_repaint());
         let sys_on = Arc::new(AtomicBool::new(false));
         let ctx3 = cc.egui_ctx.clone();
+        let ctx4 = cc.egui_ctx.clone();
+        let clips = clipboard::start(settings.clipboard_on, move || ctx4.request_repaint());
         let sys = system::start(sys_on.clone(), move || ctx3.request_repaint());
         let hit = Arc::new(Mutex::new(Hit { ppp: 1.0, ..Default::default() }));
         spawn_cursor_watch(cc.egui_ctx.clone(), hit.clone());
@@ -112,7 +122,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, tasks: Tasks::load(), sys, sys_on, art: None, adding: None, editing: false, focusable: false,
+            weather, tasks: Tasks::load(), sys, sys_on, art: None, clips, clip_scroll: 0.0, toast_msg: None, stash: Stash::load(), files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false,
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -179,6 +189,14 @@ impl eframe::App for KonApp {
             self.passthrough = !inside;
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(self.passthrough));
         }
+        // arquivos arrastados até a ilha: abre a gaveta e guarda ao soltar
+        let (hovering_files, dropped) = ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>()));
+        if hovering_files && self.page != Page::Files { self.drop_back = Some(self.page); self.page = Page::Files; self.view = View::Panel; self.stash.refresh_missing(); }
+        if !dropped.is_empty() {
+            let n = self.stash.add(&dropped);
+            self.page = Page::Files; self.view = View::Panel; self.drop_back = None;
+            self.toast(&match n { 0 => "Já estava guardado".to_string(), 1 => "1 item guardado".into(), k => format!("{k} itens guardados") });
+        } else if !hovering_files { if let Some(b) = self.drop_back.take() { if self.page == Page::Files { self.page = b; } } }
         // abrir ao passar o mouse (com um respiro de 90 ms) e fechar ao sair (280 ms de tolerância)
         if inside {
             self.leave_since = None;
@@ -269,7 +287,20 @@ impl KonApp {
             p.text(pos2(r.right() - 22.0, hy), Align2::RIGHT_CENTER, format!("{:02}:{:02}", now.hour(), now.minute()), bold(12.0), fade(Color32::WHITE, alpha));
             let body = Rect::from_min_max(pos2(r.left() + 28.0, r.top() + 42.0), pos2(r.right() - 28.0, r.bottom() - 50.0));
             self.page_weather(ui, body, w.as_ref(), alpha);
-            self.nav(ui, Rect::from_min_max(pos2(r.left() + 16.0, r.bottom() - 46.0), pos2(r.right() - 16.0, r.bottom() - 6.0)), alpha);
+            if let Some((msg, t0)) = &self.toast_msg {
+            let e = t0.elapsed().as_secs_f32();
+            if e < 1.6 {
+                let a = alpha * (1.0 - ((e - 1.3) / 0.3).clamp(0.0, 1.0)) * (e / 0.12).clamp(0.0, 1.0);
+                let w = text_w(ui, msg, 11.5) + 40.0;
+                let tr = Rect::from_center_size(pos2(r.center().x, body.bottom() - 16.0), vec2(w, 26.0));
+                p.rect_filled(tr, CornerRadius::same(13), fade(Color32::from_rgb(28, 28, 30), a));
+                p.rect_stroke(tr, CornerRadius::same(13), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(25), a)), egui::StrokeKind::Inside);
+                p.text(pos2(tr.left() + 14.0, tr.center().y), Align2::LEFT_CENTER, ic::CHECK, icon_font(12.0), fade(Color32::from_rgb(74, 222, 128), a));
+                p.text(pos2(tr.left() + 30.0, tr.center().y), Align2::LEFT_CENTER, msg.as_str(), bold(11.5), fade(Color32::WHITE, a));
+                ui.ctx().request_repaint();
+            } else { self.toast_msg = None; }
+        }
+        self.nav(ui, Rect::from_min_max(pos2(r.left() + 16.0, r.bottom() - 46.0), pos2(r.right() - 16.0, r.bottom() - 6.0)), alpha);
             return;
         }
         let date = format!("{} {:02} {}", DAYS[now.weekday().num_days_from_sunday() as usize], now.day(), MONTHS[now.month0() as usize]);
@@ -284,6 +315,8 @@ impl KonApp {
             Page::Focus => self.page_focus(ui, body, alpha),
             Page::Todo => self.page_todo(ui, body, alpha),
             Page::System => self.page_system(ui, body, alpha),
+            Page::Clip => self.page_clip(ui, body, alpha),
+            Page::Files => self.page_files(ui, body, alpha),
             Page::Weather => {}
             Page::Settings => self.page_settings(ui, body, alpha),
         }
@@ -292,7 +325,7 @@ impl KonApp {
 
     fn nav(&mut self, ui: &mut egui::Ui, bar: Rect, alpha: f32) {
         // mesma barra do Kon atual: "+" à esquerda, páginas no meio (a ativa vira pílula com nome), engrenagem à direita
-        let pages = [Page::Home, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::System];
+        let pages = [Page::Home, Page::Files, Page::Clip, Page::Music, Page::Weather, Page::Focus, Page::Todo, Page::System];
         let widths: Vec<f32> = pages.iter().map(|p| if *p == self.page { 30.0 + text_w(ui, p.label(), 10.5) } else { 28.0 }).collect();
         let total: f32 = widths.iter().sum::<f32>() + 2.0 * (pages.len() as f32 - 1.0);
         let mut x = bar.center().x - total / 2.0;
@@ -348,6 +381,153 @@ impl KonApp {
             gradient_rr(ui.painter(), r, radius as f32, Color32::from_rgb(214, 58, 134), Color32::from_rgb(76, 29, 149), alpha);
             ui.painter().text(r.center(), Align2::CENTER_CENTER, ic::MUSIC_2, icon_font(big_icon), fade(Color32::from_white_alpha(170), alpha));
         }
+    }
+
+    fn toast(&mut self, m: &str) { self.toast_msg = Some((m.into(), Instant::now())); }
+
+    fn page_files(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let p = ui.painter().clone();
+        let n = self.stash.list.len();
+        let y0 = body.top() + 9.0;
+        p.text(pos2(body.left(), y0), Align2::LEFT_CENTER, "Arquivos", bold(15.0), fade(Color32::WHITE, alpha));
+        let sub = if n == 0 { "gaveta vazia".to_string() } else { format!("{n} {}", if n == 1 { "item guardado" } else { "itens guardados" }) };
+        p.text(pos2(body.left() + text_w(ui, "Arquivos", 15.0) + 8.0, y0 + 1.0), Align2::LEFT_CENTER, sub, FontId::proportional(11.5), fade(Color32::from_white_alpha(102), alpha));
+        p.text(pos2(body.right(), y0), Align2::RIGHT_CENTER, "Clique duas vezes para abrir · nada é enviado para IA", FontId::proportional(10.5), fade(Color32::from_white_alpha(90), alpha));
+        let area = Rect::from_min_max(pos2(body.left(), body.top() + 26.0), body.max);
+        let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        if n == 0 || dragging {
+            if dragging { p.rect_filled(area, CornerRadius::same(16), fade(Color32::from_white_alpha(10), alpha)); }
+            dashed_rr(&p, area, 16.0, fade(Color32::from_white_alpha(if dragging { 90 } else { 38 }), alpha));
+            let c = area.center();
+            p.text(pos2(c.x, c.y - 20.0), Align2::CENTER_CENTER, ic::DOWNLOAD, icon_font(20.0), fade(Color32::from_white_alpha(90), alpha));
+            p.text(pos2(c.x, c.y + 2.0), Align2::CENTER_CENTER, if dragging { "Solte para guardar" } else { "Arraste arquivos ou pastas até a ilha" }, FontId::proportional(13.0), fade(Color32::from_white_alpha(178), alpha));
+            p.text(pos2(c.x, c.y + 20.0), Align2::CENTER_CENTER, "Eles ficam guardados aqui até você remover", FontId::proportional(11.0), fade(Color32::from_white_alpha(90), alpha));
+            return;
+        }
+        let cols = 2; let gap = 6.0; let row_h = 46.0;
+        let cw = (area.width() - gap) / cols as f32;
+        let rows = (n + 1) / 2;
+        let total = rows as f32 * (row_h + gap) - gap;
+        if ui.rect_contains_pointer(area) { self.files_scroll -= ui.input(|i| i.smooth_scroll_delta.y); }
+        self.files_scroll = self.files_scroll.clamp(0.0, (total - area.height()).max(0.0));
+        let pc = p.with_clip_rect(area);
+        let mut act: Option<(u8, usize)> = None;
+        for (i, it) in self.stash.list.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(area.left() + (i % cols) as f32 * (cw + gap), area.top() + (i / cols) as f32 * (row_h + gap) - self.files_scroll), vec2(cw, row_h));
+            if r.bottom() < area.top() || r.top() > area.bottom() { continue; }
+            let vis = r.intersect(area);
+            let resp = ui.interact(vis, ui.id().with(("stash", it.id)), Sense::click()).on_hover_text(&it.path);
+            let a = if it.missing { alpha * 0.45 } else { alpha };
+            pc.rect_filled(r, CornerRadius::same(12), fade(Color32::from_white_alpha(if resp.hovered() { 23 } else { 13 }), a));
+            pc.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(15), a)), egui::StrokeKind::Inside);
+            let ib = Rect::from_min_size(pos2(r.left() + 8.0, r.center().y - 16.0), vec2(32.0, 32.0));
+            pc.rect_filled(ib, CornerRadius::same(8), fade(Color32::from_white_alpha(15), a));
+            pc.text(ib.center(), Align2::CENTER_CENTER, stash::icon(&it.ext), icon_font(16.0), fade(Color32::from_white_alpha(178), a));
+            let tx = ib.right() + 10.0;
+            let btns = 3.0 * 24.0 + 6.0;
+            let maxw = r.right() - btns - tx;
+            let kind = if it.ext == "folder" { "Pasta".to_string() } else { it.ext.to_uppercase() };
+            let meta = if it.missing { "não encontrado".to_string() } else { [kind, stash::fmt_size(it.size)].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ") };
+            pc.text(pos2(tx, r.center().y - 8.0), Align2::LEFT_CENTER, ellipsize_w(ui, &it.name, 12.5, maxw), FontId::proportional(12.5), fade(Color32::WHITE, a));
+            pc.text(pos2(tx, r.center().y + 9.0), Align2::LEFT_CENTER, ellipsize_w(ui, &meta, 10.5, maxw), FontId::proportional(10.5), fade(Color32::from_white_alpha(102), a));
+            let mut bx = r.right() - 6.0 - 12.0;
+            let mut any_btn = false;
+            for (k, icon) in [(2u8, ic::TRASH_2), (1, ic::FOLDER_OPEN), (0, ic::EXTERNAL_LINK)] {
+                let br = Rect::from_center_size(pos2(bx, r.center().y), vec2(24.0, 24.0));
+                let bresp = ui.interact(br.intersect(area), ui.id().with(("stashb", it.id, k)), Sense::click());
+                if bresp.hovered() { pc.rect_filled(br, CornerRadius::same(6), fade(Color32::from_white_alpha(25), a)); any_btn = true; }
+                let base = if resp.hovered() || ui.rect_contains_pointer(vis) { if bresp.hovered() { 255 } else { 178 } } else { 110 };
+                let col = if k == 2 && bresp.hovered() { Color32::from_rgb(252, 165, 165) } else { Color32::from_white_alpha(base) };
+                pc.text(br.center(), Align2::CENTER_CENTER, icon, icon_font(12.0), fade(col, a));
+                if bresp.clicked() { act = Some((k, i)); }
+                bx -= 24.0;
+            }
+            if resp.double_clicked() && !any_btn && !it.missing { act = Some((0, i)); }
+        }
+        if let Some((k, i)) = act {
+            let it = self.stash.list[i].clone();
+            match k { 0 => stash::open(&it.path), 1 => stash::reveal(&it.path), _ => self.stash.remove(it.id) }
+        }
+    }
+
+    fn page_clip(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
+        let p = ui.painter().clone();
+        let (list, on) = { let g = self.clips.lock().unwrap(); (g.list.clone(), g.on) };
+        let teal = Color32::from_rgb(20, 184, 166);
+        // cabeçalho
+        let y0 = body.top() + 9.0;
+        p.text(pos2(body.left(), y0), Align2::LEFT_CENTER, "Área de transferência", bold(15.0), fade(Color32::WHITE, alpha));
+        let tx = body.left() + text_w(ui, "Área de transferência", 15.0) + 8.0;
+        let n = list.len();
+        let sub = if on { format!("{n} {} · senhas e chaves são ignoradas", if n == 1 { "item" } else { "itens" }) } else { "pausado".into() };
+        p.text(pos2(tx, y0 + 1.0), Align2::LEFT_CENTER, sub, FontId::proportional(11.0), fade(Color32::from_white_alpha(102), alpha));
+        let mut rx = body.right();
+        if list.iter().any(|c| !c.pinned) {
+            let w = text_w(ui, "Limpar", 11.0) + 34.0;
+            let r = Rect::from_min_size(pos2(rx - w, y0 - 12.0), vec2(w, 24.0));
+            let resp = ui.interact(r, ui.id().with("clipclear"), Sense::click());
+            p.rect_filled(r, CornerRadius::same(12), fade(Color32::from_white_alpha(if resp.hovered() { 30 } else { 18 }), alpha));
+            p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, ic::TRASH_2, icon_font(11.0), fade(Color32::WHITE, alpha));
+            p.text(pos2(r.left() + 27.0, r.center().y), Align2::LEFT_CENTER, "Limpar", bold(11.0), fade(Color32::WHITE, alpha));
+            if resp.clicked() { clipboard::clear(&self.clips); }
+            rx = r.left() - 8.0;
+        }
+        if toggle(ui, &p, pos2(rx - 18.0, y0), on, alpha).clicked() {
+            clipboard::set_on(&self.clips, !on); self.settings.clipboard_on = !on; self.settings.save();
+        }
+        p.text(pos2(rx - 42.0, y0), Align2::RIGHT_CENTER, "Gravar", FontId::proportional(10.5), fade(Color32::from_white_alpha(115), alpha));
+        let _ = teal;
+        let area = Rect::from_min_max(pos2(body.left(), body.top() + 26.0), body.max);
+        if list.is_empty() {
+            dashed_rr(&p, area, 16.0, fade(Color32::from_white_alpha(38), alpha));
+            let c = area.center();
+            p.text(pos2(c.x, c.y - 20.0), Align2::CENTER_CENTER, ic::CLIPBOARD_LIST, icon_font(20.0), fade(Color32::from_white_alpha(90), alpha));
+            p.text(pos2(c.x, c.y + 2.0), Align2::CENTER_CENTER, "Copie qualquer texto e ele aparece aqui", FontId::proportional(13.0), fade(Color32::from_white_alpha(178), alpha));
+            p.text(pos2(c.x, c.y + 20.0), Align2::CENTER_CENTER, "Fica só neste computador", FontId::proportional(11.0), fade(Color32::from_white_alpha(90), alpha));
+            return;
+        }
+        // lista com rolagem
+        let hover_area = ui.rect_contains_pointer(area);
+        if hover_area { self.clip_scroll -= ui.input(|i| i.smooth_scroll_delta.y); }
+        let row_h = 38.0; let gap = 4.0;
+        let total = list.len() as f32 * (row_h + gap) - gap;
+        self.clip_scroll = self.clip_scroll.clamp(0.0, (total - area.height()).max(0.0));
+        let pc = p.with_clip_rect(area);
+        let (mut act_copy, mut act_pin, mut act_rm) = (None, None, None);
+        for (i, c) in list.iter().enumerate() {
+            let y = area.top() + i as f32 * (row_h + gap) - self.clip_scroll;
+            let r = Rect::from_min_size(pos2(area.left(), y), vec2(area.width(), row_h));
+            if r.bottom() < area.top() || r.top() > area.bottom() { continue; }
+            let vis = r.intersect(area);
+            let resp = ui.interact(vis, ui.id().with(("clip", c.id)), Sense::click());
+            pc.rect_filled(r, CornerRadius::same(12), fade(Color32::from_white_alpha(if resp.hovered() { 23 } else { 13 }), alpha));
+            pc.rect_stroke(r, CornerRadius::same(12), Stroke::new(1.0_f32, fade(Color32::from_white_alpha(15), alpha)), egui::StrokeKind::Inside);
+            let mut x = r.left() + 12.0;
+            if c.pinned { pc.text(pos2(x, r.center().y), Align2::LEFT_CENTER, ic::PIN, icon_font(11.0), fade(Color32::from_rgb(94, 234, 212), alpha)); x += 18.0; }
+            let hm = chrono::DateTime::from_timestamp_millis(c.at).map(|d| d.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
+            let right_pad = if resp.hovered() { 100.0 } else { 46.0 };
+            let mut job = egui::text::LayoutJob::single_section(c.text.replace(['\r', '\t'], " "), egui::TextFormat { font_id: FontId::proportional(12.5), color: fade(Color32::WHITE, alpha), line_height: Some(17.0), ..Default::default() });
+            job.wrap = egui::text::TextWrapping { max_width: r.right() - right_pad - x, max_rows: 2, break_anywhere: true, overflow_character: Some('…') };
+            let g = ui.fonts_mut(|f| f.layout_job(job));
+            pc.galley(pos2(x, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
+            let mut bx = r.right() - 12.0;
+            if resp.hovered() || ui.rect_contains_pointer(vis) {
+                for (k, icon) in [(2, ic::TRASH_2), (1, if c.pinned { ic::PIN_OFF } else { ic::PIN })] {
+                    let br = Rect::from_center_size(pos2(bx - 12.0, r.center().y), vec2(24.0, 24.0));
+                    let bresp = ui.interact(br.intersect(area), ui.id().with(("clipb", c.id, k)), Sense::click());
+                    if bresp.hovered() { pc.rect_filled(br, CornerRadius::same(6), fade(Color32::from_white_alpha(25), alpha)); }
+                    let col = if k == 2 && bresp.hovered() { Color32::from_rgb(252, 165, 165) } else { Color32::from_white_alpha(if bresp.hovered() { 255 } else { 153 }) };
+                    pc.text(br.center(), Align2::CENTER_CENTER, icon, icon_font(12.0), fade(col, alpha));
+                    if bresp.clicked() { if k == 2 { act_rm = Some(c.id) } else { act_pin = Some(c.id) } }
+                    bx -= 26.0;
+                }
+            }
+            pc.text(pos2(bx - 2.0, r.center().y), Align2::RIGHT_CENTER, hm, FontId::proportional(10.0), fade(Color32::from_white_alpha(90), alpha));
+            if resp.clicked() && act_pin.is_none() && act_rm.is_none() { act_copy = Some(c.id); }
+        }
+        if let Some(id) = act_rm { clipboard::remove(&self.clips, id); }
+        else if let Some(id) = act_pin { clipboard::pin(&self.clips, id); }
+        else if let Some(id) = act_copy { if clipboard::copy(&self.clips, id) { self.toast("Copiado"); } }
     }
 
     fn page_system(&mut self, ui: &mut egui::Ui, body: Rect, alpha: f32) {
@@ -679,6 +859,22 @@ fn rr_mesh(p: &egui::Painter, r: Rect, rad: f32, color: impl Fn(Pos2) -> Color32
     let n = pts.len() as u32;
     for i in 0..n { mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n); }
     p.add(egui::Shape::mesh(mesh));
+}
+/// Borda tracejada arredondada (estado vazio, como o border-dashed do Kon atual).
+fn dashed_rr(p: &egui::Painter, r: Rect, rad: f32, col: Color32) {
+    let mut pts = vec![];
+    let corners = [(r.right() - rad, r.bottom() - rad, 0.0f32), (r.left() + rad, r.bottom() - rad, 90.0), (r.left() + rad, r.top() + rad, 180.0), (r.right() - rad, r.top() + rad, 270.0)];
+    for (cx, cy, st) in corners { for i in 0..=6 { let a = (st + i as f32 * 15.0).to_radians(); pts.push(pos2(cx + rad * a.cos(), cy + rad * a.sin())); } }
+    pts.push(pts[0]);
+    for s in egui::Shape::dashed_line(&pts, Stroke::new(1.0_f32, col), 4.0, 3.0) { p.add(s); }
+}
+/// Corta o texto com "…" para caber na largura (em pontos).
+fn ellipsize_w(ui: &egui::Ui, s: &str, size: f32, max: f32) -> String {
+    if text_w(ui, s, size) <= max { return s.to_string(); }
+    let ch: Vec<char> = s.chars().collect();
+    let (mut lo, mut hi) = (0usize, ch.len());
+    while lo < hi { let mid = (lo + hi + 1) / 2; let t: String = ch[..mid].iter().collect::<String>() + "…"; if text_w(ui, &t, size) <= max { lo = mid } else { hi = mid - 1 } }
+    ch[..lo].iter().collect::<String>() + "…"
 }
 fn fade(c: Color32, a: f32) -> Color32 { c.gamma_multiply(a.clamp(0.0, 1.0)) }
 fn bold(size: f32) -> FontId { FontId::new(size, FontFamily::Name("bold".into())) }

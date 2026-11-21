@@ -1,12 +1,14 @@
 //! Kon nativo: o notch do Windows escrito em Rust, desenhado pela placa de vídeo, sem motor web.
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+mod clipboard;
 mod icons;
 mod media;
 mod tasks;
 mod weather;
 mod platform;
 mod settings;
+mod stash;
 mod system;
 mod ui;
 
@@ -28,6 +30,7 @@ fn main() -> eframe::Result<()> {
             .with_position([x, area.y as f32 / scale])
             .with_decorations(false)
             .with_transparent(true)
+            .with_drag_and_drop(true)
             .with_resizable(false)
             .with_always_on_top()
             .with_taskbar(false)

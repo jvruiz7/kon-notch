@@ -9,11 +9,12 @@ pub struct Settings {
     pub focus_minutes: u32,
     pub accent: [u8; 3],
     pub page: String,
+    pub clipboard_on: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { open_on_hover: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into() }
+        Settings { open_on_hover: true, focus_minutes: 25, accent: [99, 102, 241], page: "home".into(), clipboard_on: true }
     }
 }
 
