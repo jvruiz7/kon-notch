@@ -3596,7 +3596,14 @@ pub struct IslandLook { pub docked: bool, pub tone: Option<Color32>, pub accent:
 fn draw_island(p: &egui::Painter, r: Rect, view: View, look: &IslandLook) {
     let (top, bot) = if look.docked { (0.0, if matches!(view, View::Panel | View::Sheet) { 24.0 } else { (r.height() / 2.0).min(24.0) }) } else { let f = (r.height() / 2.0).min(26.0); (f, f) };
     let cr = CornerRadius { nw: top as u8, ne: top as u8, sw: bot as u8, se: bot as u8 };
-    p.add(egui::epaint::Shadow { offset: [0, 22], blur: 55, spread: 0, color: Color32::from_black_alpha(140) }.as_shape(r, cr));
+    // sombra suave (aproxima o box-shadow 0 22px 55px do Kon atual). Encostada no topo, a sombra parte só da
+    // metade de baixo, com cantos todos arredondados: canto reto no egui vira riscos diagonais e uma faixa escura
+    // dos lados da ilha no topo da tela.
+    let sr = if look.docked { Rect::from_min_max(pos2(r.left() + bot * 0.4, r.top() + r.height() * 0.45), pos2(r.right() - bot * 0.4, r.bottom())) } else { r };
+    let srad = (bot.min(sr.height() / 2.0)) as u8;
+    for (oy, blur, alpha) in [(3i8, 10u8, 40u8), (9, 24, 30), (16, 44, 22), (24, 72, 14), (30, 104, 8)] {
+        p.add(egui::epaint::Shadow { offset: [0, oy], blur, spread: 0, color: Color32::from_black_alpha(alpha) }.as_shape(sr, CornerRadius::same(srad)));
+    }
     p.rect_filled(r, cr, BG);
     if look.docked {
         let ear = 16.0;
