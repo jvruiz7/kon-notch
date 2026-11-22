@@ -39,8 +39,9 @@ VIAddVersionKey "LegalCopyright" "Kon"
 
 !macro CloseKon
   ; fecha só o Kon desta pasta (o Kon antigo, em Electron, fica em outra pasta e não é tocado aqui)
-  nsExec::Exec `powershell -NoProfile -NonInteractive -Command "Get-Process | Where-Object { $$_.Path -eq '$INSTDIR\${EXE}' } | Stop-Process -Force -ErrorAction SilentlyContinue"`
-  Sleep 700
+  ; (o instalador é 32 bits: Get-Process não enxerga o caminho de processos 64 bits, por isso CIM)
+  nsExec::Exec `"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process -Filter \"Name='Kon.exe'\" | Where-Object { $$_.ExecutablePath -eq '$INSTDIR\${EXE}' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }"`
+  Sleep 900
 !macroend
 
 Section "Kon" SecMain
@@ -48,6 +49,9 @@ Section "Kon" SecMain
   !insertmacro CloseKon
   SetOutPath "$INSTDIR"
   Delete "$INSTDIR\Kon.old.exe"
+  ; se ainda estiver aberto, um exe em uso pode ser renomeado (não sobrescrito): o novo entra no lugar
+  IfFileExists "$INSTDIR\${EXE}" 0 +2
+    Rename "$INSTDIR\${EXE}" "$INSTDIR\Kon.old.exe"
   File "/oname=${EXE}" "..\target\release\kon.exe"
   WriteUninstaller "$INSTDIR\Desinstalar.exe"
   CreateShortcut "$SMPROGRAMS\Kon (nativo).lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\${EXE}" 0
