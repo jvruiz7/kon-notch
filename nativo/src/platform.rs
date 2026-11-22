@@ -12,6 +12,22 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::*;
     use windows::Win32::Graphics::Gdi::{MonitorFromPoint, GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTOPRIMARY};
 
+    /// Para o diagnóstico: onde a janela está e se está visível.
+    pub fn window_info() -> String {
+        unsafe {
+            match hwnd() {
+                None => "janela KonNativo não encontrada".into(),
+                Some(h) => {
+                    let mut r = windows::Win32::Foundation::RECT::default();
+                    let _ = GetWindowRect(h, &mut r);
+                    let ex = GetWindowLongW(h, GWL_EXSTYLE);
+                    let mut pid = 0u32; GetWindowThreadProcessId(h, Some(&mut pid));
+                    format!("rect=({},{})-({},{}) visivel={} exstyle={:#x} pid={} (eu={})", r.left, r.top, r.right, r.bottom, IsWindowVisible(h).as_bool(), ex, pid, std::process::id())
+                }
+            }
+        }
+    }
+
     fn hwnd() -> Option<HWND> {
         // a janela do Kon nativo tem o título "KonNativo" (o Kon antigo, em Electron, usa "Kon") e é da nossa classe (winit)
         unsafe { FindWindowW(None, w!("KonNativo")).ok() }
@@ -299,6 +315,7 @@ mod imp {
 mod imp {
     use super::PxRect;
     pub fn cursor_in_window() -> Option<(i32, i32)> { None }
+    pub fn window_info() -> String { String::new() }
     pub fn primary_work_area() -> PxRect { PxRect { x: 0, y: 0, w: 1920, h: 1080 } }
     pub fn make_tool_window() {}
     pub fn place(_follow_cursor: bool) -> bool { false }
@@ -329,3 +346,14 @@ mod imp {
 }
 
 pub use imp::*;
+
+/// Diário de diagnóstico em %APPDATA%\KonNativo\kon.log (sem chaves, sem conteúdo de arquivos).
+pub fn log(msg: &str) {
+    use std::io::Write;
+    let d = data_dir(); let _ = std::fs::create_dir_all(&d);
+    let p = d.join("kon.log");
+    if std::fs::metadata(&p).map_or(false, |m| m.len() > 300_000) { let _ = std::fs::rename(&p, d.join("kon.old.log")); }
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&p) {
+        let _ = writeln!(f, "{} {}", chrono::Local::now().format("%H:%M:%S%.3f"), msg);
+    }
+}

@@ -35,9 +35,10 @@ const WIN_W: f32 = 820.0;
 const WIN_H: f32 = 560.0;
 
 fn main() -> eframe::Result<()> {
+    platform::log(&format!("início v{} args={:?} exe={:?}", env!("CARGO_PKG_VERSION"), std::env::args().skip(1).collect::<Vec<_>>(), std::env::current_exe().ok()));
     if std::env::args().any(|a| a == "--uninstall") { installer::uninstall(); return Ok(()); }
-    if !installer::single_instance() { return Ok(()); }
-    if installer::ensure_installed() { return Ok(()); }
+    if !installer::single_instance() { platform::log("outra cópia já está aberta: saindo"); return Ok(()); }
+    if installer::ensure_installed() { platform::log("instalado: abrindo a cópia instalada e saindo"); return Ok(()); }
     installer::close_old_kon();
     let area = platform::primary_work_area();
     // posição em pixels lógicos: o eframe converte com a escala do monitor principal
@@ -67,7 +68,9 @@ fn main() -> eframe::Result<()> {
         let _ = std::fs::write(d.join("erro.log"), format!("pane: {info}\n"));
         installer::message(&format!("O Kon encontrou um erro e precisou fechar:\n\n{info}\n\nO detalhe ficou salvo em %APPDATA%\\KonNativo\\erro.log"), false);
     }));
+    platform::log(&format!("área de trabalho principal: {}x{} em ({},{})", area.w, area.h, area.x, area.y));
     let r = eframe::run_native("Kon", make(eframe::Renderer::Glow), Box::new(|cc| Ok(Box::new(ui::KonApp::new(cc)))));
+    platform::log(&format!("fim: {:?}", r.as_ref().err()));
     if let Err(e) = &r {
         // sem console no Windows: o erro vai para %APPDATA%\KonNativo\erro.log
         let d = platform::data_dir();

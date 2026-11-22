@@ -182,6 +182,8 @@ pub struct KonApp {
     dict: Arc<Mutex<(bool, Option<Result<String, String>>, u64)>>,
     rates: calc::SharedRates,
     drop_zone: u8,
+    diag_at: Option<Instant>,
+    diag_n: u32,
     drag_req: Option<String>,
     dragging_out: Option<Instant>,
     drop_prev: Option<View>,
@@ -196,6 +198,7 @@ impl KonApp {
         install_fonts(&cc.egui_ctx);
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         let settings = Settings::load();
+        if let Some(gl) = cc.gl.as_ref() { use eframe::glow::HasContext; unsafe { crate::platform::log(&format!("OpenGL: {} · {} · {}", gl.get_parameter_string(eframe::glow::VENDOR), gl.get_parameter_string(eframe::glow::RENDERER), gl.get_parameter_string(eframe::glow::VERSION))); } }
         let approvals0 = settings.approvals;
         let ctx = cc.egui_ctx.clone();
         let media = Media::start(move || ctx.request_repaint());
@@ -223,7 +226,7 @@ impl KonApp {
             last_frame: Instant::now(),
             blink_at: Instant::now() + Duration::from_millis(3800),
             focus: Focus { total: mins * 60, left: (mins * 60) as f32, running_until: None, finished_at: None },
-            weather, loc, cal_month: false, tasks: Tasks::load(), sys, sys_on, art: None, art_color: None, lyr: lyrics::new(), lyr_y: 0.0, success_at: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_tab: if std::env::var("KON_SHEET").as_deref() == Ok("pages") { 1 } else { 0 }, show_key: false, loc_menu: false, ics_in: None, vol_dragging: false, report_state: 0, report_note: String::new(), report_shot: false, report_result: None, ob_step: 0, cal: Arc::new(Mutex::new(calendar::State::default())), cal_ctx: cc.egui_ctx.clone(), upd: updater::new(), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: std::env::var("KON_Q").unwrap_or_default(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), dismissed: vec![], meeting_sounded: None, key_sounded: false, fg: start_fg_watch(cc.egui_ctx.clone()), hud_at: None, vol_seen: None, perm_count: 0, dnd_prev: None, hidden: false, capture_applied: None, rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false, ocr_shot: None, ocr: Arc::new(Mutex::new(OcrRes::default())), ocr_q: String::new(), ask_file: None, dict: Arc::new(Mutex::new((false, None, 0))), rates: calc::rates_new(), drop_zone: 0, drag_req: None, dragging_out: None, drop_prev: None, drop_rects: [Rect::NOTHING; 3], zip_res: Arc::new(Mutex::new(None)),
+            weather, loc, cal_month: false, tasks: Tasks::load(), sys, sys_on, art: None, art_color: None, lyr: lyrics::new(), lyr_y: 0.0, success_at: None, clips, clip_scroll: 0.0, toast_msg: None, ctoast: None, quick: quick::load(), qform: None, qedit: false, sys_alerts, usage: usage::new(), claude_usage_tab: std::env::var("KON_USAGE").is_ok(), usage_at: None, sheet_scroll: 0.0, sleep_until: None, inuse: { let c = cc.egui_ctx.clone(); inuse::start(move || c.request_repaint()) }, sheet_tab: if std::env::var("KON_SHEET").as_deref() == Ok("pages") { 1 } else { 0 }, show_key: false, loc_menu: false, ics_in: None, vol_dragging: false, report_state: 0, report_note: String::new(), report_shot: false, report_result: None, ob_step: 0, cal: Arc::new(Mutex::new(calendar::State::default())), cal_ctx: cc.egui_ctx.clone(), upd: updater::new(), drag_page: None, ask: Arc::new(Mutex::new(ai::Ask::default())), ask_q: std::env::var("KON_Q").unwrap_or_default(), ask_rows: 0.0, hot: { let c = cc.egui_ctx.clone(); hotkeys::start(move || c.request_repaint()) }, key_in: [String::new(), String::new()], model_in: [String::new(), String::new()], copied_at: None, dbg_last: String::new(), dismissed: vec![], meeting_sounded: None, key_sounded: false, fg: start_fg_watch(cc.egui_ctx.clone()), hud_at: None, vol_seen: None, perm_count: 0, dnd_prev: None, hidden: false, capture_applied: None, rems: reminders::load(), due: vec![], tr: Arc::new(Mutex::new(Tr { src: "Detect".into(), tgt: "English".into(), ..Default::default() })), ta: Arc::new(Mutex::new(if std::env::var("KON_DEMO").as_deref() == Ok("texto") { TextAct { text: "oi pessoal, segue o orçamento atualizado da obra, qualquer coisa me avisa".into(), ..Default::default() } } else { TextAct::default() })), stash: Stash::load(), claude: { let c = cc.egui_ctx.clone(); claude::start(approvals0, move || c.request_repaint()) }, hooks_on: claude::hooks_state().0, hooks_err: None, files_scroll: 0.0, drop_back: None, adding: None, editing: false, focusable: false, ocr_shot: None, ocr: Arc::new(Mutex::new(OcrRes::default())), ocr_q: String::new(), ask_file: None, dict: Arc::new(Mutex::new((false, None, 0))), rates: calc::rates_new(), drop_zone: 0, diag_at: None, diag_n: 0, drag_req: None, dragging_out: None, drop_prev: None, drop_rects: [Rect::NOTHING; 3], zip_res: Arc::new(Mutex::new(None)),
             _tray: tray::Tray::new(cc.egui_ctx.clone()),
             quit: false,
         }
@@ -375,7 +378,11 @@ impl eframe::App for KonApp {
         if self.hud() { ctx.request_repaint_after(Duration::from_millis(200)); }
         // esconder em tela cheia (jogo, vídeo, apresentação) — volta sozinho; pedidos e lembretes aparecem mesmo assim
         let full = self.fg.lock().unwrap().0 && self.settings.hide_fullscreen && self.claude.lock().unwrap().perms.is_empty() && self.due.is_empty();
-        if full != self.hidden { self.hidden = full; crate::platform::set_visible(!full); }
+        if full != self.hidden { self.hidden = full; crate::platform::set_visible(!full); crate::platform::log(&format!("tela cheia={full} → {}", if full { "escondido" } else { "visível" })); }
+        if self.diag_at.map_or(true, |t| t.elapsed() > Duration::from_secs(if self.diag_n < 10 { 2 } else { 30 })) {
+            self.diag_at = Some(now); self.diag_n += 1;
+            if self.diag_n <= 60 { let f = *self.fg.lock().unwrap(); crate::platform::log(&format!("quadro: view={:?} tam={:.0}x{:.0} ppp={:.2} fg=(cheia {}, max {}) escondido={} posicionado={} | {}", self.view, self.w.v, self.h.v, ctx.pixels_per_point(), f.0, f.1, self.hidden, self.placed, crate::platform::window_info())); }
+        }
         // fora de prints e compartilhamento de tela
         if self.capture_applied != Some(self.settings.hide_in_capture) && self.placed { crate::platform::exclude_from_capture(self.settings.hide_in_capture); self.capture_applied = Some(self.settings.hide_in_capture); }
         // lembretes: dispara os que venceram e mostra o cartão (depois dos pedidos do Claude)
